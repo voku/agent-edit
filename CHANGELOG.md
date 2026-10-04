@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.1.1 - 2026-10-04
+
+### Fixed
+
+- A failed authorized mutation attempt now persists a `runner_failed` receipt after the rollback has been observed (while the mutation lock is still held), then rethrows the original exception. Authorization refusals and failures before the pre-mutation snapshot remain receipt-free.
+
+### Added
+
+- Standalone real-filesystem publication-rollback dogfood in CI, and README documentation of the failed-mutation receipt contract.
+
 ## 0.1.0 - 2026-10-04
 
 ### Added
