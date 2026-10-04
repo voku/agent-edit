@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Changed
+
+- A refused plan now explains itself with the owner's own evidence: the refusal sentence is followed by the plan status and the first Map blockers, stale-evidence entries or blind spots (bounded, with a `(+N more)` count), for all six plan families. A removal blocked by a live call site now names that call site instead of only saying "not safe".
+- `agent-edit apply` reports an unknown option together with the accepted ones (`--task`, `--map-index`, `--map-root`, `--output-dir`, `--dry-run`) and no longer calls its own options "refactor" options.
+
 ## 0.2.1 - 2026-10-04
 
 ### Fixed

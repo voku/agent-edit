@@ -47,7 +47,7 @@ final readonly class RenamePlanDocument implements EditMovePlanEvidence
             throw new RuntimeException('Rename plan requires stale_evidence list evidence.');
         }
         if ($staleEvidence !== []) {
-            throw new RuntimeException('Rename plan contains stale evidence; rebuild the map and re-plan before applying.');
+            throw PlanRefusal::because('Rename plan contains stale evidence; rebuild the map and re-plan before applying.', $data);
         }
 
         $blockers = $data['blockers'] ?? null;
@@ -55,15 +55,15 @@ final readonly class RenamePlanDocument implements EditMovePlanEvidence
             throw new RuntimeException('Rename plan requires blockers list evidence.');
         }
         if ($blockers !== []) {
-            throw new RuntimeException('Rename plan has semantic blockers; no source was changed.');
+            throw PlanRefusal::because('Rename plan has semantic blockers; no source was changed.', $data);
         }
 
         $status = $data['status'] ?? null;
         if ($status === 'review_required') {
-            throw new RuntimeException('Rename plan requires explicit review; no source was changed.');
+            throw PlanRefusal::because('Rename plan requires explicit review; no source was changed.', $data);
         }
         if ($status !== 'safe') {
-            throw new RuntimeException('Rename plan is not safe; no source was changed.');
+            throw PlanRefusal::because('Rename plan is not safe; no source was changed.', $data);
         }
 
         $blindSpots = $data['blind_spots'] ?? null;

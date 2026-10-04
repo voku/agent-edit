@@ -30,10 +30,10 @@ final readonly class MethodMovePlanDocument implements EditMovePlanEvidence
             throw new RuntimeException('Unsupported agent-map method move plan contract.');
         }
         if (($data['status'] ?? null) === 'review_required') {
-            throw new RuntimeException('Method move plan requires explicit review; no source was changed.');
+            throw PlanRefusal::because('Method move plan requires explicit review; no source was changed.', $data);
         }
         if (($data['status'] ?? null) !== 'safe') {
-            throw new RuntimeException('Method move plan is not safe; no source was changed.');
+            throw PlanRefusal::because('Method move plan is not safe; no source was changed.', $data);
         }
 
         foreach (['blind_spots', 'stale_evidence', 'blockers'] as $field) {
