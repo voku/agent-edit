@@ -1,0 +1,7 @@
+vendor/
+composer.lock
+build/
+.phpunit.cache/
+.agent-map/
+.agent-edit/
+.phpunit.result.cache

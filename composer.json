@@ -1,0 +1,51 @@
+{
+  "name": "voku/agent-edit",
+  "type": "library",
+  "description": "Deterministic, evidence-backed source mutation for coding agents: validate, apply transactionally and verify agent-map plans.",
+  "license": "MIT",
+  "homepage": "https://github.com/voku/agent-edit",
+  "support": {
+    "issues": "https://github.com/voku/agent-edit/issues",
+    "source": "https://github.com/voku/agent-edit"
+  },
+  "keywords": ["agent", "coding-agent", "php", "refactoring", "source-mutation", "agent-map", "ai", "llm"],
+  "authors": [
+    {
+      "name": "Lars Moelleken",
+      "homepage": "https://github.com/voku"
+    }
+  ],
+  "bin": ["bin/agent-edit"],
+  "autoload": {
+    "psr-4": {
+      "voku\\AgentEdit\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "voku\\AgentEdit\\Tests\\": "tests/"
+    }
+  },
+  "require": {
+    "php": "^8.3",
+    "helgesverre/toon": "^3.1",
+    "voku/agent-map": "^0.18.3"
+  },
+  "require-dev": {
+    "phpstan/phpstan": "^2.1",
+    "phpunit/phpunit": "^11.5"
+  },
+  "config": {
+    "sort-packages": true,
+    "allow-plugins": false
+  },
+  "scripts": {
+    "test": "phpunit",
+    "phpstan": "phpstan analyse --configuration=phpstan.neon.dist --memory-limit=512M",
+    "ci": [
+      "@composer validate --strict",
+      "@test",
+      "@phpstan"
+    ]
+  }
+}
