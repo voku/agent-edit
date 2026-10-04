@@ -72,19 +72,24 @@ final readonly class ClassConstantRemovalVerifier implements BundleVerifier
             throw new RuntimeException('Class-constant removal verification requires a PHPStan-backed current map.');
         }
 
-        $changedFiles = $execution['changed_files'] ?? null;
-        if (!is_array($changedFiles) || ($execution['changed_files_source'] ?? null) !== 'git_status_diff') {
-            throw new RuntimeException('Class-constant removal verification requires independently observed changed_files evidence.');
-        }
-        $actualChanged = [];
-        foreach ($changedFiles as $path) {
-            if (!is_string($path) || $path === '') {
-                throw new RuntimeException('Class-constant removal execution contains invalid changed_files evidence.');
+        $viaManifest = ($execution['changed_files_source'] ?? null) === MapManifestEvidence::SOURCE;
+        if ($viaManifest) {
+            $actualChanged = (new MapManifestEvidence())->observe($execution, $bundle, $map, $mapRoot);
+        } else {
+            $changedFiles = $execution['changed_files'] ?? null;
+            if (!is_array($changedFiles) || ($execution['changed_files_source'] ?? null) !== 'git_status_diff') {
+                throw new RuntimeException('Class-constant removal verification requires independently observed changed_files evidence.');
             }
-            $actualChanged[] = $this->relativePath($path);
+            $actualChanged = [];
+            foreach ($changedFiles as $path) {
+                if (!is_string($path) || $path === '') {
+                    throw new RuntimeException('Class-constant removal execution contains invalid changed_files evidence.');
+                }
+                $actualChanged[] = $this->relativePath($path);
+            }
+            $actualChanged = array_values(array_unique($actualChanged));
+            sort($actualChanged, SORT_STRING);
         }
-        $actualChanged = array_values(array_unique($actualChanged));
-        sort($actualChanged, SORT_STRING);
 
         $expectedChanged = [];
         foreach ($document->edits as $edit) {
@@ -125,7 +130,7 @@ final readonly class ClassConstantRemovalVerifier implements BundleVerifier
         return [
             'schema_version' => '1.0',
             'kind' => 'class_constant_removal_plan_verification',
-            'status' => 'passed',
+            'status' => $viaManifest ? 'incomplete' : 'passed',
             'task_id' => $taskId,
             'plan' => [
                 'type' => 'class_constant_removal_plan',
@@ -141,11 +146,11 @@ final readonly class ClassConstantRemovalVerifier implements BundleVerifier
             'checks' => [
                 'execution_binding' => 'passed',
                 'current_map' => 'passed',
-                'changed_files' => 'passed',
+                'changed_files' => $viaManifest ? 'map_indexed_files_only' : 'passed',
                 'target_absent' => 'passed',
                 'source_hashes' => 'passed',
             ],
-        ];
+        ] + ($viaManifest ? ['scope' => MapManifestEvidence::scope()] : []);
     }
 
     /** @return array{0: string, 1: string} */

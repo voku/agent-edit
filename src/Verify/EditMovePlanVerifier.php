@@ -82,19 +82,24 @@ final readonly class EditMovePlanVerifier implements BundleVerifier
             throw new RuntimeException('Current refactor verification requires a PHPStan-backed map for this plan contract.');
         }
 
-        $changedFiles = $execution['changed_files'] ?? null;
-        if (!is_array($changedFiles) || ($execution['changed_files_source'] ?? null) !== 'git_status_diff') {
-            throw new RuntimeException('Refactor verification requires independently observed changed_files evidence.');
-        }
-        $actualChanged = [];
-        foreach ($changedFiles as $path) {
-            if (!is_string($path) || $path === '') {
-                throw new RuntimeException('Refactor execution contains invalid changed_files evidence.');
+        $viaManifest = ($execution['changed_files_source'] ?? null) === MapManifestEvidence::SOURCE;
+        if ($viaManifest) {
+            $actualChanged = (new MapManifestEvidence())->observe($execution, $bundle, $map, $mapRoot);
+        } else {
+            $changedFiles = $execution['changed_files'] ?? null;
+            if (!is_array($changedFiles) || ($execution['changed_files_source'] ?? null) !== 'git_status_diff') {
+                throw new RuntimeException('Refactor verification requires independently observed changed_files evidence.');
             }
-            $actualChanged[] = $this->relativePath($path);
+            $actualChanged = [];
+            foreach ($changedFiles as $path) {
+                if (!is_string($path) || $path === '') {
+                    throw new RuntimeException('Refactor execution contains invalid changed_files evidence.');
+                }
+                $actualChanged[] = $this->relativePath($path);
+            }
+            $actualChanged = array_values(array_unique($actualChanged));
+            sort($actualChanged, SORT_STRING);
         }
-        $actualChanged = array_values(array_unique($actualChanged));
-        sort($actualChanged, SORT_STRING);
 
         $moveTargets = [];
         $expectedChanged = [];
@@ -214,7 +219,7 @@ final readonly class EditMovePlanVerifier implements BundleVerifier
                 'method_move_plan' => 'method_move_plan_verification',
                 default => 'rename_plan_verification',
             },
-            'status' => 'passed',
+            'status' => $viaManifest ? 'incomplete' : 'passed',
             'task_id' => $taskId,
             'plan' => [
                 'type' => $document->planType(),
@@ -230,11 +235,11 @@ final readonly class EditMovePlanVerifier implements BundleVerifier
             'checks' => [
                 'execution_binding' => 'passed',
                 'current_map' => 'passed',
-                'changed_files' => 'passed',
+                'changed_files' => $viaManifest ? 'map_indexed_files_only' : 'passed',
                 'replacements' => 'passed',
                 'moves' => 'passed',
             ],
-        ];
+        ] + ($viaManifest ? ['scope' => MapManifestEvidence::scope()] : []);
     }
 
     /** @param array<string, mixed> $plan */

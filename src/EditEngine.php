@@ -18,6 +18,7 @@ use voku\AgentEdit\Capability\PlanCapability;
 use voku\AgentEdit\Receipt\ApplyRequest;
 use voku\AgentEdit\Receipt\EditReceipt;
 use voku\AgentEdit\Verify\BundleVerifier;
+use voku\AgentEdit\Verify\MapManifestEvidence;
 use voku\AgentMap\Index\AgentMapIndex;
 use voku\AgentMap\Index\IndexReader;
 use voku\AgentMap\MapArtifactPaths;
@@ -106,6 +107,7 @@ final readonly class EditEngine
         $before = null;
         $after = null;
         $failure = null;
+        $manifestBefore = null;
 
         if ($request->dryRun) {
             $before = $snapshotter->capture($request->repositoryRoot);
@@ -129,8 +131,12 @@ final readonly class EditEngine
             try {
                 $result = $this->mutationLock->synchronized(
                     $request->repositoryRoot,
-                    static function () use ($applier, $plan, $map, $request, $snapshotter, &$before, &$after): EditResult {
+                    static function () use ($applier, $plan, $map, $request, $snapshotter, &$before, &$after, &$manifestBefore): EditResult {
                         $before = $snapshotter->capture($request->repositoryRoot);
+                        if (!$before->available) {
+                            // Without Git, record what the Map indexes so a verifier can still observe those files.
+                            $manifestBefore = MapManifestEvidence::capture($map, $request->mapRoot);
+                        }
                         try {
                             $result = $applier->apply($plan, $map, $request->mapRoot);
                         } catch (Throwable $exception) {
@@ -159,6 +165,19 @@ final readonly class EditEngine
             throw new RuntimeException('Refactor execution completed without a working-tree observation.');
         }
         $receiptPath = $request->outputDirectory . '/' . self::RECEIPT_FILE;
+        $observed = [
+            'changed_files' => $after->changedPathsSince($before),
+            'changed_files_source' => $before->available && $after->available ? 'git_status_diff' : 'unavailable',
+        ];
+        if ($manifestBefore !== null) {
+            $encoded = MapManifestEvidence::encode($manifestBefore);
+            $this->writeAtomically($request->outputDirectory . '/' . MapManifestEvidence::FILE, $encoded);
+            $observed = [
+                'changed_files' => MapManifestEvidence::changedSince($manifestBefore, $request->mapRoot),
+                'changed_files_source' => MapManifestEvidence::SOURCE,
+                'scope_evidence' => MapManifestEvidence::reference($encoded),
+            ];
+        }
         $this->writeAtomically($receiptPath, $this->json([
             'schema_version' => '1.0',
             'status' => $result->status,
@@ -179,9 +198,7 @@ final readonly class EditEngine
                 'model_input_tokens' => 0,
                 'model_tool_calls' => 0,
             ],
-            'changed_files' => $after->changedPathsSince($before),
-            'changed_files_source' => $before->available && $after->available ? 'git_status_diff' : 'unavailable',
-        ]));
+        ] + $observed));
 
         $receipt = new EditReceipt(
             $result->status,

@@ -65,6 +65,8 @@ Plan type and contract version are routed only through `CapabilityRegistry`. Any
 
 `execution.json` inside the bundle is an **agent-edit receipt** (`schema_version` 1.0). It binds the plan file hash, Map digest, runner identity and Git-observed `changed_files`, and is what `verify` consumes. It is not owned by `agent-loop`. The names `execution.json`, `task_id` (the caller-supplied label) and `runner.name` are kept for compatibility with hosts that already read them; `model_input_tokens`/`model_tool_calls` are always `0`.
 
+Without Git the receipt falls back to a Map-scoped observation: before mutating, `agent-edit` stores `map-scope-before.json` (path → sha256 for every Map-indexed file) in the bundle and the receipt references it only by `scope_evidence` (`source`, `path`, `sha256`) with `changed_files_source: map_manifest_diff`. `verify` recomputes the manifest and diffs it, so an extra changed *indexed* file outside the plan is an error. It proves only `map_indexed_files`: the result is `status: incomplete` with `scope.status: scope_unproven` (never `passed`, CLI exit code `3`), because a file outside the Map index can change unobserved. With Git the receipt and result are unchanged.
+
 After an authorized mutation attempt fails, `applyWithReceipt()` first observes the post-rollback working tree and persists a `runner_failed` receipt before rethrowing the original failure. A host authorization refusal still happens before the mutation attempt and writes no receipt.
 
 ## Boundaries
