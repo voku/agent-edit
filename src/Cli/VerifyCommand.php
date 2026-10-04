@@ -42,7 +42,8 @@ final readonly class VerifyCommand
             : 'Refactor';
         $candidate = str_starts_with($options['bundle'], '/') ? $options['bundle'] : $this->projectRoot . '/' . $options['bundle'];
         $bundle = str_replace('\\', '/', (string) realpath($candidate));
-        echo $label . " verification: passed\n";
+        $status = is_string($result['status'] ?? null) ? $result['status'] : 'passed';
+        echo $label . ' verification: ' . $status . ($status === 'incomplete' ? ' (scope_unproven: only Map-indexed files were observed)' : '') . "\n";
         echo '- bundle: ' . $bundle . "\n";
         if ($label === 'Refactor') {
             echo '- plan: ' . (string) ($plan['type'] ?? '') . '@' . (string) ($plan['contract_version'] ?? '') . "\n";
@@ -50,7 +51,7 @@ final readonly class VerifyCommand
         echo '- target: ' . (string) ($plan['target_id'] ?? '') . "\n";
         echo '- result: ' . $bundle . '/' . EditEngine::VERIFICATION_FILE . "\n";
 
-        return 0;
+        return $status === 'passed' ? 0 : 3;
     }
 
     /**

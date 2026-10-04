@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Added
+
+- Git-free verification evidence: when Git is unavailable, `applyWithReceipt` stores a bound `map-scope-before.json` (Map-indexed path → sha256) and records `changed_files_source: map_manifest_diff`; `verify` diffs it and returns `status: incomplete` / `scope.status: scope_unproven` (CLI exit 3), never `passed`. Receipts and results produced with Git are unchanged.
+
 ## 0.1.1 - 2026-10-04
 
 ### Fixed
