@@ -136,6 +136,10 @@ final readonly class ApplyCommand
         $mapRoot = $this->existingDirectory($root, $values['map-root'] ?? $root, 'map root');
         $mapIndex = $this->existingFile($root, $values['map-index'] ?? MapArtifactPaths::forProject($root)->indexJson(), 'map index');
         $output = $this->resolvePath($root, $values['output-dir'] ?? '.agent-edit/receipts/' . $taskId);
+        // `verify` only accepts bundles inside the project root, so a receipt written elsewhere could never be verified.
+        if (str_contains('/' . $output . '/', '/../') || ($output !== $root && !str_starts_with($output, rtrim($root, '/') . '/'))) {
+            throw new InvalidArgumentException('--output-dir must stay inside the project root: ' . $output);
+        }
 
         return [
             'task_id' => $taskId,

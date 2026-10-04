@@ -49,7 +49,8 @@ PHP);
         (new IndexWriter())->write($this->map, $this->mapPath);
         $this->planPath = $this->root . '/plan.json';
         file_put_contents($this->planPath, json_encode($this->plan(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
-        exec('cd ' . escapeshellarg($this->root) . ' && git init -q . && printf "map.json\\nplan.json\\n.agent-edit/\\n" > .gitignore && git add -A && git -c user.email=t@example.invalid -c user.name=t commit -qm init');
+        exec('cd ' . escapeshellarg($this->root) . ' && git init -q . && printf "map.json\\nplan.json\\n.agent-edit/\\n" > .gitignore && git add -A && git -c user.email=t@example.invalid -c user.name=t commit -qm init', $gitOutput, $gitExit);
+        self::assertSame(0, $gitExit, 'git fixture setup failed: ' . implode("\n", $gitOutput));
     }
 
     protected function tearDown(): void

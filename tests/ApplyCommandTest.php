@@ -189,4 +189,26 @@ PHP);
 
         return $data;
     }
+
+    public function testOutputDirectoryOutsideTheProjectRootIsRejectedBeforeAnyWrite(): void
+    {
+        $before = (string) file_get_contents($this->root . '/src/Service.php');
+        $outside = sys_get_temp_dir() . '/agent-edit-outside-' . bin2hex(random_bytes(4));
+
+        foreach ([$outside, '../escape'] as $directory) {
+            ob_start();
+            $exit = (new ApplyCommand($this->root))->run([
+                $this->planPath,
+                '--task=OUTSIDE',
+                '--map-index=' . $this->mapPath,
+                '--output-dir=' . $directory,
+            ]);
+            ob_end_clean();
+
+            self::assertSame(1, $exit);
+        }
+
+        self::assertDirectoryDoesNotExist($outside);
+        self::assertSame($before, file_get_contents($this->root . '/src/Service.php'));
+    }
 }

@@ -22,6 +22,8 @@ final class RenamePlanApplierTest extends TestCase
     {
         $this->root = sys_get_temp_dir() . '/agent-edit-refactor-applier-' . bin2hex(random_bytes(6));
         mkdir($this->root . '/src', 0o775, true);
+        // The applier resolves paths through realpath(); compare injected failures against the same spelling.
+        $this->root = (string) realpath($this->root);
         file_put_contents($this->root . '/src/Service.php', <<<'PHP'
 <?php
 

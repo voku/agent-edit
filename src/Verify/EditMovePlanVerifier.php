@@ -153,7 +153,15 @@ final readonly class EditMovePlanVerifier implements BundleVerifier
             foreach ($edits as $edit) {
                 $removedLength = $edit->endFilePos - $edit->startFilePos + 1;
                 if ($edit->replacement === '') {
-                    if (str_contains($content, $edit->expected)) {
+                    // A same-file move re-inserts the removed text in the file; only occurrences the plan itself
+                    // does not put back count as "still present".
+                    $reinserted = 0;
+                    foreach ($edits as $other) {
+                        if ($other->replacement !== '') {
+                            $reinserted += substr_count($other->replacement, $edit->expected);
+                        }
+                    }
+                    if (substr_count($content, $edit->expected) > $reinserted) {
                         throw new RuntimeException(sprintf(
                             'Removed refactor source is still present in %s.',
                             $finalPath,

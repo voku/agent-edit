@@ -87,7 +87,6 @@ final readonly class EditEngine
     public function applyWithReceipt(ApplyRequest $request): EditReceipt
     {
         $this->ensureDirectory($request->outputDirectory);
-        $before = $this->snapshotter->capture($request->repositoryRoot);
 
         $planRaw = file_get_contents($request->planPath);
         if (!is_string($planRaw)) {
@@ -102,8 +101,12 @@ final readonly class EditEngine
             throw new RuntimeException('Unable to hash agent-map index: ' . $request->mapIndexPath);
         }
         $applier = $this->applier($plan);
+        $snapshotter = $this->snapshotter;
+        $before = null;
+        $after = null;
 
         if ($request->dryRun) {
+            $before = $snapshotter->capture($request->repositoryRoot);
             $prepared = $applier->preflight($plan, $map, $request->mapRoot);
             $result = new EditResult(
                 status: 'prepared',
@@ -119,13 +122,23 @@ final readonly class EditEngine
             if ($request->authorizeMutation !== null) {
                 ($request->authorizeMutation)($request->label);
             }
+            // Observe changed files inside the lock: edits another process makes while this one waits for the lock
+            // must not be attributed to this plan.
             $result = $this->mutationLock->synchronized(
                 $request->repositoryRoot,
-                static fn (): EditResult => $applier->apply($plan, $map, $request->mapRoot),
+                static function () use ($applier, $plan, $map, $request, $snapshotter, &$before, &$after): EditResult {
+                    $before = $snapshotter->capture($request->repositoryRoot);
+                    $result = $applier->apply($plan, $map, $request->mapRoot);
+                    $after = $snapshotter->capture($request->repositoryRoot);
+
+                    return $result;
+                },
             );
         }
-
-        $after = $this->snapshotter->capture($request->repositoryRoot);
+        $after ??= $snapshotter->capture($request->repositoryRoot);
+        if ($before === null) {
+            throw new RuntimeException('Refactor execution completed without a working-tree observation.');
+        }
         $receiptPath = $request->outputDirectory . '/' . self::RECEIPT_FILE;
         $this->writeAtomically($receiptPath, $this->json([
             'schema_version' => '1.0',

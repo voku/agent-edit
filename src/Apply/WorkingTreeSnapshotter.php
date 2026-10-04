@@ -27,15 +27,29 @@ final readonly class WorkingTreeSnapshotter
         // incorrectly downgraded real worktrees to unavailable evidence.
         $head = $this->run($root, ['git', 'rev-parse', 'HEAD']);
         $status = $this->run($root, ['git', 'status', '--porcelain=v1', '-z', '--untracked-files=all']);
-        if ($status === null) {
+        $topLevel = $this->run($root, ['git', 'rev-parse', '--show-toplevel']);
+        $prefix = $this->run($root, ['git', 'rev-parse', '--show-prefix']);
+        if ($status === null || $topLevel === null || $prefix === null) {
             return WorkingTreeSnapshot::unavailable();
         }
 
+        // Porcelain paths are always relative to the Git top level, which differs from the repository root when the
+        // project is a subdirectory of a larger work tree. Hash from the top level and report root-relative paths.
+        $base = rtrim(trim($topLevel), '/');
+        $prefix = trim($prefix);
+
         $entries = [];
         foreach ($this->parseStatus($status) as $path => $code) {
-            $absolute = $root . '/' . $path;
+            if ($prefix !== '' && !str_starts_with($path, $prefix)) {
+                continue;
+            }
+            $relative = substr($path, strlen($prefix));
+            if ($relative === '') {
+                continue;
+            }
+            $absolute = $base . '/' . $path;
             $hash = is_file($absolute) ? hash_file('sha256', $absolute) : false;
-            $entries[$path] = $code . ':' . (is_string($hash) ? $hash : 'absent');
+            $entries[$relative] = $code . ':' . (is_string($hash) ? $hash : 'absent');
         }
         ksort($entries, SORT_STRING);
 

@@ -109,9 +109,9 @@ final readonly class CapabilityRegistry
             if (!is_array($entry) || !is_string($entry['plan_type'] ?? null) || !is_string($entry['contract_version'] ?? null)) {
                 throw new InvalidArgumentException('Map plan capability entry is malformed.');
             }
-            $planned[$entry['plan_type']] = true;
             $own = $this->find($entry['plan_type']);
             if ($own !== null && in_array($entry['contract_version'], $own->contractVersions, true)) {
+                $planned[$entry['plan_type']] = true;
                 $executable[] = ['map' => $entry, 'edit' => $own->toArray()];
                 continue;
             }

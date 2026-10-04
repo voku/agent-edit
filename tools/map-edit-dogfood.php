@@ -170,6 +170,20 @@ $scenarios = [
             assertContains($dir, 'src/Target.php', 'function helper');
         },
     ),
+    // Both classes live in one file: the move re-inserts the removed method text into the same file.
+    'method-move-same-file' => static fn () => $happy(
+        'method-move-same-file',
+        ['src/Both.php' => php("final class Source\n{\n    private static function helper(int \$x): int\n    {\n        return \$x + 1;\n    }\n}\n\nfinal class Target\n{\n}")],
+        "method-move-plan 'Demo\\Source::helper' 'Demo\\Target'",
+        'method_move_plan',
+        static function (string $dir): void {
+            $source = (string) file_get_contents($dir . '/src/Both.php');
+            if (substr_count($source, 'function helper') !== 1 || strpos($source, 'function helper') < strpos($source, 'final class Target')) {
+                fwrite(STDERR, "method-move-same-file: the method was not moved into Target.\n");
+                exit(1);
+            }
+        },
+    ),
     // Fail-closed: the source changed after planning, so the plan's SHA-256 evidence no longer matches.
     'stale-plan-rejected' => static function () use ($build, $map, $edit): void {
         $dir = fixture(['src/Service.php' => php("final class Service\n{\n    public function oldName(): int\n    {\n        return 1;\n    }\n}")]);

@@ -152,4 +152,15 @@ final class CapabilitiesTest extends TestCase
             self::assertSame($capability, (new CapabilityRegistry())->findByRunner($capability->runner) === null ? null : $capability);
         }
     }
+
+    public function testTypePlannedOnlyAtAnUnsupportedVersionStillCountsAsExecutableNotPlanned(): void
+    {
+        $result = (new CapabilityRegistry())->intersect([
+            'type' => 'plan_capabilities',
+            'capabilities' => [['plan_type' => 'class_move_plan', 'contract_version' => '2.0']],
+        ]);
+
+        self::assertSame([], $result['executable']);
+        self::assertContains('class_move_plan', $result['executable_not_planned']);
+    }
 }
