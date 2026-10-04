@@ -149,7 +149,10 @@ final class CapabilitiesTest extends TestCase
         foreach ((new CapabilityRegistry())->all() as $capability) {
             self::assertTrue(is_subclass_of($capability->applier, \voku\AgentEdit\Apply\PlanApplier::class), $capability->planType);
             self::assertTrue(is_subclass_of($capability->verifier, \voku\AgentEdit\Verify\BundleVerifier::class), $capability->planType);
-            self::assertSame($capability, (new CapabilityRegistry())->findByRunner($capability->runner) === null ? null : $capability);
+            // Verification dispatch routes by runner name, so every capability sharing a runner must share its verifier.
+            $routed = (new CapabilityRegistry())->findByRunner($capability->runner);
+            self::assertNotNull($routed, $capability->planType);
+            self::assertSame($capability->verifier, $routed->verifier, $capability->planType);
         }
     }
 

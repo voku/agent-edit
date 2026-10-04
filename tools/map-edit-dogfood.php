@@ -89,7 +89,7 @@ function php(string $body, string $namespace = 'Demo'): string
     return "<?php\n\ndeclare(strict_types=1);\n\nnamespace {$namespace};\n\n" . $body . "\n";
 }
 
-$build = static fn (string $dir) => must($dir, $GLOBALS['map'] . ' build --root=. --paths=src --out=.agent-map/php-symbols.json');
+$build = static fn (string $dir) => must($dir, $map . ' build --root=. --paths=src --out=.agent-map/php-symbols.json');
 
 $composer = json_encode(['autoload' => ['psr-4' => ['App\\Legacy\\' => 'src/Legacy/', 'App\\Modern\\' => 'src/Modern/', 'App\\Client\\' => 'src/Client/']]], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
 
