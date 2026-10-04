@@ -89,8 +89,21 @@ final readonly class EditEngine
      */
     public function applyWithReceipt(ApplyRequest $request): EditReceipt
     {
-        $this->ensureDirectory($request->outputDirectory);
+        // A refusal that produces no receipt (dry-run preflight refusal, unknown plan type, host authorization refusal)
+        // must not leave an empty bundle behind: a host that counts every bundle directory of a task would read the
+        // empty one as a missing verification result and block a close that never edited anything.
+        $created = $this->createDirectories($request->outputDirectory);
+        try {
+            return $this->applyAndPersist($request);
+        } catch (Throwable $exception) {
+            $this->removeEmptyDirectories($created);
 
+            throw $exception;
+        }
+    }
+
+    private function applyAndPersist(ApplyRequest $request): EditReceipt
+    {
         $planRaw = file_get_contents($request->planPath);
         if (!is_string($planRaw)) {
             throw new RuntimeException('Unable to read refactor plan: ' . $request->planPath);
@@ -336,8 +349,40 @@ final readonly class EditEngine
 
     private function ensureDirectory(string $directory): void
     {
-        if (!is_dir($directory) && !mkdir($directory, 0o775, true) && !is_dir($directory)) {
+        $this->createDirectories($directory);
+    }
+
+    /**
+     * Creates the directory (and missing parents) and reports exactly which ones this call created, deepest first.
+     *
+     * @return list<string>
+     */
+    private function createDirectories(string $directory): array
+    {
+        $missing = [];
+        for ($path = $directory; $path !== '' && !is_dir($path); $path = dirname($path)) {
+            $missing[] = $path;
+            if (dirname($path) === $path) {
+                break;
+            }
+        }
+        if ($missing !== [] && !@mkdir($directory, 0o775, true) && !is_dir($directory)) {
             throw new RuntimeException('Unable to create refactor evidence directory: ' . $directory);
+        }
+
+        return $missing;
+    }
+
+    /** @param list<string> $directories deepest first; only directories that are still empty are removed */
+    private function removeEmptyDirectories(array $directories): void
+    {
+        foreach ($directories as $directory) {
+            if (!is_dir($directory) || (new \FilesystemIterator($directory))->valid()) {
+                return;
+            }
+            if (!@rmdir($directory)) {
+                return;
+            }
         }
     }
 

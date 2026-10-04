@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Fixed
+
+- A refusal that produces no receipt (dry-run preflight refusal of a `blocked` plan, unsupported plan type/contract version, host authorization refusal) no longer leaves an empty receipt bundle directory behind. Found by replaying a real fail-closed `method-removal-plan` against `agent-recall-compiler`: hosts that count every bundle directory of a task would read the empty one as a missing verification result.
+
 ## 0.2.1 - 2026-10-04
 
 ### Fixed
