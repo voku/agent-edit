@@ -8,6 +8,7 @@ use HelgeSverre\Toon\Toon;
 use InvalidArgumentException;
 use JsonException;
 use RuntimeException;
+use Throwable;
 use voku\AgentEdit\Apply\EditResult;
 use voku\AgentEdit\Apply\MutationLock;
 use voku\AgentEdit\Apply\PlanApplier;
@@ -104,6 +105,7 @@ final readonly class EditEngine
         $snapshotter = $this->snapshotter;
         $before = null;
         $after = null;
+        $failure = null;
 
         if ($request->dryRun) {
             $before = $snapshotter->capture($request->repositoryRoot);
@@ -124,16 +126,29 @@ final readonly class EditEngine
             }
             // Observe changed files inside the lock: edits another process makes while this one waits for the lock
             // must not be attributed to this plan.
-            $result = $this->mutationLock->synchronized(
-                $request->repositoryRoot,
-                static function () use ($applier, $plan, $map, $request, $snapshotter, &$before, &$after): EditResult {
-                    $before = $snapshotter->capture($request->repositoryRoot);
-                    $result = $applier->apply($plan, $map, $request->mapRoot);
-                    $after = $snapshotter->capture($request->repositoryRoot);
+            try {
+                $result = $this->mutationLock->synchronized(
+                    $request->repositoryRoot,
+                    static function () use ($applier, $plan, $map, $request, $snapshotter, &$before, &$after): EditResult {
+                        $before = $snapshotter->capture($request->repositoryRoot);
+                        $result = $applier->apply($plan, $map, $request->mapRoot);
+                        $after = $snapshotter->capture($request->repositoryRoot);
 
-                    return $result;
-                },
-            );
+                        return $result;
+                    },
+                );
+            } catch (Throwable $exception) {
+                if ($before === null) {
+                    throw $exception;
+                }
+                $after = $snapshotter->capture($request->repositoryRoot);
+                $result = new EditResult(
+                    status: 'runner_failed',
+                    exitCode: 1,
+                    stderr: $exception->getMessage(),
+                );
+                $failure = $exception;
+            }
         }
         $after ??= $snapshotter->capture($request->repositoryRoot);
         if ($before === null) {
@@ -164,7 +179,7 @@ final readonly class EditEngine
             'changed_files_source' => $before->available && $after->available ? 'git_status_diff' : 'unavailable',
         ]));
 
-        return new EditReceipt(
+        $receipt = new EditReceipt(
             $result->status,
             $result->exitCode,
             $request->outputDirectory,
@@ -172,6 +187,12 @@ final readonly class EditEngine
             (string) ($plan['type'] ?? ''),
             (string) ($plan['target_id'] ?? ''),
         );
+
+        if ($failure !== null) {
+            throw $failure;
+        }
+
+        return $receipt;
     }
 
     /**
