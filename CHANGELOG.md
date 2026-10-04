@@ -4,11 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## 0.2.0 - 2026-10-04
 
 ### Added
 
-- Git-free verification evidence: when Git is unavailable, `applyWithReceipt` stores a bound `map-scope-before.json` (Map-indexed path → sha256) and records `changed_files_source: map_manifest_diff`; `verify` diffs it and returns `status: incomplete` / `scope.status: scope_unproven` (CLI exit 3), never `passed`. Receipts and results produced with Git are unchanged.
+- Git-free verification evidence: when Git is unavailable, `applyWithReceipt` stores a bound `map-scope-before.json` (Map-indexed path → sha256) and records `changed_files_source: map_manifest_diff`; `verify` diffs it and returns `status: incomplete` / `scope.status: scope_unproven` (CLI exit 3), never `passed`. Receipts and results produced with Git are unchanged. New public contract: `changed_files_source: map_manifest_diff`, `scope_evidence`, `status: incomplete`, `scope.status: scope_unproven` and CLI exit code `3`.
+
+### Changed
+
+- The snapshotter observation contracts (subdirectory Git root, no repository, untracked/deleted files, linked worktree) are now covered by agent-edit's own test suite.
 
 ## 0.1.1 - 2026-10-04
 
