@@ -95,6 +95,9 @@ final readonly class EditEngine
         $created = $this->createDirectories($request->outputDirectory);
         try {
             return $this->applyAndPersist($request);
+        } catch (ReceiptNotPersistedException $exception) {
+            // The edits are already published: the bundle directory is the only trace a host can discover.
+            throw $exception;
         } catch (Throwable $exception) {
             $this->removeEmptyDirectories($created);
 
