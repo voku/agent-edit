@@ -131,17 +131,21 @@ final readonly class EditEngine
                     $request->repositoryRoot,
                     static function () use ($applier, $plan, $map, $request, $snapshotter, &$before, &$after): EditResult {
                         $before = $snapshotter->capture($request->repositoryRoot);
-                        $result = $applier->apply($plan, $map, $request->mapRoot);
+                        try {
+                            $result = $applier->apply($plan, $map, $request->mapRoot);
+                        } catch (Throwable $exception) {
+                            $after = $snapshotter->capture($request->repositoryRoot);
+                            throw $exception;
+                        }
                         $after = $snapshotter->capture($request->repositoryRoot);
 
                         return $result;
                     },
                 );
             } catch (Throwable $exception) {
-                if ($before === null) {
+                if ($before === null || $after === null) {
                     throw $exception;
                 }
-                $after = $snapshotter->capture($request->repositoryRoot);
                 $result = new EditResult(
                     status: 'runner_failed',
                     exitCode: 1,
