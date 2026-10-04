@@ -1,0 +1,17 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+use voku\AgentEdit\Cli\CliApplication;
+
+// Prefer the host project's autoloader when installed as a dependency (see agent-map's bin for the rationale).
+$autoload = __DIR__ . '/../../../autoload.php';
+if (!is_file($autoload)) {
+    $autoload = __DIR__ . '/../vendor/autoload.php';
+}
+
+require $autoload;
+
+$root = getcwd();
+exit((new CliApplication(is_string($root) ? $root : '.'))->run($argv));

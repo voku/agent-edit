@@ -1,0 +1,214 @@
+<?php
+
+declare(strict_types=1);
+
+namespace voku\AgentEdit\Tests;
+
+use Closure;
+use PHPUnit\Framework\TestCase;
+use RecursiveDirectoryIterator;
+use RecursiveIteratorIterator;
+use voku\AgentEdit\Cli\CliApplication;
+use voku\AgentEdit\Apply\MutationLock;
+use voku\AgentEdit\Cli\ApplyCommand;
+use voku\AgentEdit\EditEngine;
+use voku\AgentEdit\Apply\RenamePlanApplier;
+use voku\AgentMap\Index\AgentMapIndex;
+use voku\AgentMap\Index\IndexWriter;
+use voku\AgentEdit\Tests\Support\CachedAgentMapBuilder;
+
+final class ApplyCommandTest extends TestCase
+{
+    private string $root;
+    private AgentMapIndex $map;
+    private string $mapPath;
+    private string $planPath;
+
+    protected function setUp(): void
+    {
+        $this->root = sys_get_temp_dir() . '/agent-edit-refactor-command-' . bin2hex(random_bytes(6));
+        mkdir($this->root . '/src', 0o775, true);
+        file_put_contents($this->root . '/src/Service.php', <<<'PHP'
+<?php
+
+declare(strict_types=1);
+
+namespace Demo;
+
+final class Service
+{
+    public function oldName(): void
+    {
+    }
+}
+PHP);
+
+        $this->map = CachedAgentMapBuilder::build($this->root, ['src'], []);
+        $this->mapPath = $this->root . '/map.json';
+        (new IndexWriter())->write($this->map, $this->mapPath);
+        $this->planPath = $this->root . '/plan.json';
+        file_put_contents($this->planPath, json_encode($this->plan(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
+    }
+
+    protected function tearDown(): void
+    {
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($this->root, RecursiveDirectoryIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::CHILD_FIRST,
+        );
+        foreach ($iterator as $item) {
+            $item->isDir() ? rmdir($item->getPathname()) : unlink($item->getPathname());
+        }
+        rmdir($this->root);
+    }
+
+    public function testCliApplicationRoutesApplyDryRun(): void
+    {
+        $before = (string) file_get_contents($this->root . '/src/Service.php');
+
+        ob_start();
+        $exit = (new CliApplication($this->root))->run([
+            'agent-edit',
+            'apply',
+            $this->planPath,
+            '--task=REFACTOR-DRY',
+            '--map-index=' . $this->mapPath,
+            '--dry-run',
+        ]);
+        $output = (string) ob_get_clean();
+
+        self::assertSame(0, $exit);
+        self::assertStringContainsString('Refactor execution bundle prepared:', $output);
+        self::assertSame($before, file_get_contents($this->root . '/src/Service.php'));
+
+        $execution = $this->execution('REFACTOR-DRY');
+        self::assertSame('prepared', $execution['status']);
+        self::assertSame('method_rename_plan', $execution['plan']['type']);
+        self::assertSame('method:Demo\\Service::oldName', $execution['plan']['target_id']);
+        self::assertSame('rename-plan', $execution['runner']['name']);
+        self::assertTrue($execution['runner']['dry_run']);
+        self::assertSame(0, $execution['runner']['model_input_tokens']);
+        self::assertSame(0, $execution['runner']['model_tool_calls']);
+    }
+
+    public function testMutationPublicationRunsInsideSharedProjectLock(): void
+    {
+        $state = new class {
+            public bool $insideLock = false;
+            public bool $observedPublication = false;
+        };
+        $lock = new MutationLock(
+            synchronizeOperation: static function (string $projectRoot, Closure $operation) use ($state): mixed {
+                self::assertNotSame('', $projectRoot);
+                self::assertFalse($state->insideLock);
+                $state->insideLock = true;
+                try {
+                    return $operation();
+                } finally {
+                    $state->insideLock = false;
+                }
+            },
+        );
+        $applier = new RenamePlanApplier(
+            renameOperation: static function (string $from, string $to) use ($state): bool {
+                self::assertTrue($state->insideLock, 'rename-plan publication must stay inside the shared edit mutation lock');
+                if (str_contains($from, '.agent-edit-plan-stage-')) {
+                    $state->observedPublication = true;
+                }
+
+                return rename($from, $to);
+            },
+        );
+        $command = new ApplyCommand($this->root, new EditEngine(
+            mutationLock: $lock,
+            applierOverrides: [RenamePlanApplier::class => $applier],
+        ));
+
+        ob_start();
+        $exit = $command->run([
+            $this->planPath,
+            '--task=REFACTOR-LOCK',
+            '--map-index=' . $this->mapPath,
+        ]);
+        ob_end_clean();
+
+        self::assertSame(0, $exit);
+        self::assertTrue($state->observedPublication);
+        self::assertFalse($state->insideLock);
+        self::assertStringContainsString('function newName()', (string) file_get_contents($this->root . '/src/Service.php'));
+        self::assertSame('runner_succeeded', $this->execution('REFACTOR-LOCK')['status']);
+    }
+
+    /** @return array<string, mixed> */
+    private function plan(): array
+    {
+        $source = (string) file_get_contents($this->root . '/src/Service.php');
+        $start = strpos($source, 'oldName');
+        self::assertIsInt($start);
+        $file = $this->map->file('src/Service.php');
+        self::assertNotNull($file);
+        $target = 'method:Demo\\Service::oldName';
+
+        return [
+            'type' => 'method_rename_plan',
+            'contract_version' => '1.0',
+            'status' => 'safe',
+            'target_id' => $target,
+            'provenance' => [
+                'map_digest' => $this->map->mapDigest(),
+                'backend' => $this->map->backend,
+                'analysis_fingerprint' => $this->map->fingerprint?->toArray(),
+            ],
+            'edits' => [[
+                'path' => 'src/Service.php',
+                'source_sha256' => $file->sha256,
+                'start_file_pos' => $start,
+                'end_file_pos' => $start + strlen('oldName') - 1,
+                'line_start' => 9,
+                'line_end' => 9,
+                'expected' => 'oldName',
+                'replacement' => 'newName',
+                'role' => 'declaration',
+                'symbol_id' => $target,
+                'resolution' => 'parser_resolved',
+            ]],
+            'blind_spots' => [],
+            'stale_evidence' => [],
+            'blockers' => [],
+            'not_observable' => [],
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function execution(string $taskId): array
+    {
+        $raw = file_get_contents($this->root . '/.agent-edit/receipts/' . $taskId . '/execution.json');
+        self::assertIsString($raw);
+        $data = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+        self::assertIsArray($data);
+
+        return $data;
+    }
+
+    public function testOutputDirectoryOutsideTheProjectRootIsRejectedBeforeAnyWrite(): void
+    {
+        $before = (string) file_get_contents($this->root . '/src/Service.php');
+        $outside = sys_get_temp_dir() . '/agent-edit-outside-' . bin2hex(random_bytes(4));
+
+        foreach ([$outside, '../escape'] as $directory) {
+            ob_start();
+            $exit = (new ApplyCommand($this->root))->run([
+                $this->planPath,
+                '--task=OUTSIDE',
+                '--map-index=' . $this->mapPath,
+                '--output-dir=' . $directory,
+            ]);
+            ob_end_clean();
+
+            self::assertSame(1, $exit);
+        }
+
+        self::assertDirectoryDoesNotExist($outside);
+        self::assertSame($before, file_get_contents($this->root . '/src/Service.php'));
+    }
+}
