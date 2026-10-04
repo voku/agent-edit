@@ -69,6 +69,14 @@ Without Git the receipt falls back to a Map-scoped observation: before mutating,
 
 After an authorized mutation attempt fails, `applyWithReceipt()` first observes the post-rollback working tree and persists a `runner_failed` receipt before rethrowing the original failure. A host authorization refusal still happens before the mutation attempt and writes no receipt.
 
+**When the receipt itself cannot be written** (unwritable bundle directory, full disk, a blocking path), the apply outcome stays the primary signal and nothing is silent:
+
+| Situation | Behavior |
+| --- | --- |
+| Source published, receipt write fails | `ReceiptNotPersistedException` (`changedFiles`, `outputDirectory`, previous = the write error). The lock is already released and the transaction committed, so there is no snapshot to restore: the working tree is changed without evidence. No receipt file exists (never a half-written one), so `verify` refuses the bundle and a governed close cannot pass. Restore from version control and re-plan. |
+| Apply failed (rolled back), failure receipt write fails | The original apply failure is rethrown unchanged; the receipt problem never replaces it. |
+| Dry run, receipt write fails | The plain write error; nothing was published. |
+
 ## Boundaries
 
 `agent-edit` owns plan validation, exact edits/moves, transactional publication, rollback, the mutation lock, observed changed files, receipts and deterministic verification, and the executable capability list.

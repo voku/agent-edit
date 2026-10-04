@@ -17,6 +17,7 @@ use voku\AgentEdit\Capability\CapabilityRegistry;
 use voku\AgentEdit\Capability\PlanCapability;
 use voku\AgentEdit\Receipt\ApplyRequest;
 use voku\AgentEdit\Receipt\EditReceipt;
+use voku\AgentEdit\Receipt\ReceiptNotPersistedException;
 use voku\AgentEdit\Verify\BundleVerifier;
 use voku\AgentEdit\Verify\MapManifestEvidence;
 use voku\AgentMap\Index\AgentMapIndex;
@@ -165,40 +166,55 @@ final readonly class EditEngine
             throw new RuntimeException('Refactor execution completed without a working-tree observation.');
         }
         $receiptPath = $request->outputDirectory . '/' . self::RECEIPT_FILE;
-        $observed = [
-            'changed_files' => $after->changedPathsSince($before),
-            'changed_files_source' => $before->available && $after->available ? 'git_status_diff' : 'unavailable',
-        ];
-        if ($manifestBefore !== null) {
-            $encoded = MapManifestEvidence::encode($manifestBefore);
-            $this->writeAtomically($request->outputDirectory . '/' . MapManifestEvidence::FILE, $encoded);
+        $changedFiles = $after->changedPathsSince($before);
+        try {
             $observed = [
-                'changed_files' => MapManifestEvidence::changedSince($manifestBefore, $request->mapRoot),
-                'changed_files_source' => MapManifestEvidence::SOURCE,
-                'scope_evidence' => MapManifestEvidence::reference($encoded),
+                'changed_files' => $changedFiles,
+                'changed_files_source' => $before->available && $after->available ? 'git_status_diff' : 'unavailable',
             ];
+            if ($manifestBefore !== null) {
+                $changedFiles = MapManifestEvidence::changedSince($manifestBefore, $request->mapRoot);
+                $encoded = MapManifestEvidence::encode($manifestBefore);
+                $this->writeAtomically($request->outputDirectory . '/' . MapManifestEvidence::FILE, $encoded);
+                $observed = [
+                    'changed_files' => $changedFiles,
+                    'changed_files_source' => MapManifestEvidence::SOURCE,
+                    'scope_evidence' => MapManifestEvidence::reference($encoded),
+                ];
+            }
+            $this->writeAtomically($receiptPath, $this->json([
+                'schema_version' => '1.0',
+                'status' => $result->status,
+                'task_id' => $request->label,
+                'plan' => [
+                    'path' => $request->planPath,
+                    'sha256' => 'sha256:' . hash('sha256', $planRaw),
+                    'type' => $plan['type'] ?? null,
+                    'contract_version' => $plan['contract_version'] ?? null,
+                    'target_id' => $plan['target_id'] ?? null,
+                ],
+                'map_digest' => $map->mapDigest(),
+                'map_index_sha256' => 'sha256:' . $mapIndexHash,
+                'runner' => [
+                    'name' => $capability->runner,
+                    'exit_code' => $result->exitCode,
+                    'dry_run' => $request->dryRun,
+                    'model_input_tokens' => 0,
+                    'model_tool_calls' => 0,
+                ],
+            ] + $observed));
+        } catch (Throwable $writeFailure) {
+            // The apply outcome stays the primary signal: a failed attempt's real error is never replaced by the
+            // receipt problem, and a published edit without a receipt is reported as exactly that.
+            if ($failure !== null) {
+                throw $failure;
+            }
+            if (!$request->dryRun && $result->status === 'runner_succeeded') {
+                throw new ReceiptNotPersistedException($changedFiles, $request->outputDirectory, $writeFailure);
+            }
+
+            throw $writeFailure;
         }
-        $this->writeAtomically($receiptPath, $this->json([
-            'schema_version' => '1.0',
-            'status' => $result->status,
-            'task_id' => $request->label,
-            'plan' => [
-                'path' => $request->planPath,
-                'sha256' => 'sha256:' . hash('sha256', $planRaw),
-                'type' => $plan['type'] ?? null,
-                'contract_version' => $plan['contract_version'] ?? null,
-                'target_id' => $plan['target_id'] ?? null,
-            ],
-            'map_digest' => $map->mapDigest(),
-            'map_index_sha256' => 'sha256:' . $mapIndexHash,
-            'runner' => [
-                'name' => $capability->runner,
-                'exit_code' => $result->exitCode,
-                'dry_run' => $request->dryRun,
-                'model_input_tokens' => 0,
-                'model_tool_calls' => 0,
-            ],
-        ] + $observed));
 
         $receipt = new EditReceipt(
             $result->status,
@@ -330,10 +346,10 @@ final readonly class EditEngine
     {
         $this->ensureDirectory(dirname($path));
         $temporary = $path . '.tmp-' . getmypid();
-        if (file_put_contents($temporary, $content) === false) {
+        if (@file_put_contents($temporary, $content) === false) {
             throw new RuntimeException('Unable to write refactor evidence: ' . $temporary);
         }
-        if (!rename($temporary, $path)) {
+        if (!@rename($temporary, $path)) {
             if (is_file($temporary) && !unlink($temporary)) {
                 throw new RuntimeException('Unable to publish refactor evidence and cleanup temporary file: ' . $path);
             }
