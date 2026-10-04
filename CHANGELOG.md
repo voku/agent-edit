@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Fixed
+
+- A receipt write failure after a successful publication now raises `ReceiptNotPersistedException` (naming the changed files and stating that no receipt exists) instead of an anonymous "Unable to publish refactor evidence" error, and a failure-receipt write error no longer masks the original apply failure. Receipt writes no longer emit PHP warnings on `rename`/`file_put_contents` failure.
+
 ## 0.2.0 - 2026-10-04
 
 ### Added
