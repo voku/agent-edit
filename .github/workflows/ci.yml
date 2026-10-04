@@ -46,5 +46,5 @@ jobs:
         run: |
           test ! -d vendor/voku/agent-loop
           ! composer show 'voku/agent-loop' 2>/dev/null
-      - name: Dogfood rename, class rename, class move, method move, stale plan, tampered plan
+      - name: Dogfood mutation lifecycle, fail-closed guards and publication rollback
         run: php tools/map-edit-dogfood.php

@@ -65,6 +65,8 @@ Plan type and contract version are routed only through `CapabilityRegistry`. Any
 
 `execution.json` inside the bundle is an **agent-edit receipt** (`schema_version` 1.0). It binds the plan file hash, Map digest, runner identity and Git-observed `changed_files`, and is what `verify` consumes. It is not owned by `agent-loop`. The names `execution.json`, `task_id` (the caller-supplied label) and `runner.name` are kept for compatibility with hosts that already read them; `model_input_tokens`/`model_tool_calls` are always `0`.
 
+After an authorized mutation attempt fails, `applyWithReceipt()` first observes the post-rollback working tree and persists a `runner_failed` receipt before rethrowing the original failure. A host authorization refusal still happens before the mutation attempt and writes no receipt.
+
 ## Boundaries
 
 `agent-edit` owns plan validation, exact edits/moves, transactional publication, rollback, the mutation lock, observed changed files, receipts and deterministic verification, and the executable capability list.

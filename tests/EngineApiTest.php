@@ -100,6 +100,42 @@ PHP);
         self::assertFileDoesNotExist($this->root . '/.agent-edit/receipts/API-DENIED/' . EditEngine::RECEIPT_FILE);
     }
 
+    public function testFailedAuthorizedMutationPersistsRollbackReceipt(): void
+    {
+        $before = (string) file_get_contents($this->root . '/src/Service.php');
+        $engine = new EditEngine(
+            applierOverrides: [
+                RenamePlanApplier::class => new RenamePlanApplier(
+                    renameOperation: static function (string $from, string $to): bool {
+                        if (str_contains($from, '.agent-edit-plan-stage-')) {
+                            return false;
+                        }
+
+                        return rename($from, $to);
+                    },
+                ),
+            ],
+        );
+
+        try {
+            $engine->applyWithReceipt($this->request('API-ROLLBACK'));
+            self::fail('Expected publication failure.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('every source file was restored', $exception->getMessage());
+        }
+
+        self::assertSame($before, file_get_contents($this->root . '/src/Service.php'));
+
+        $raw = file_get_contents($this->root . '/.agent-edit/receipts/API-ROLLBACK/' . EditEngine::RECEIPT_FILE);
+        self::assertIsString($raw);
+        $receipt = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+        self::assertIsArray($receipt);
+        self::assertSame('runner_failed', $receipt['status']);
+        self::assertSame(1, $receipt['runner']['exit_code']);
+        self::assertSame([], $receipt['changed_files']);
+        self::assertSame('git_status_diff', $receipt['changed_files_source']);
+    }
+
     public function testDryRunSkipsTheAuthorizationHookAndWritesNoSource(): void
     {
         $before = (string) file_get_contents($this->root . '/src/Service.php');
