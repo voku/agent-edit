@@ -224,6 +224,76 @@ $scenarios = [
         }
         echo "ok   tampered-plan-writes-nothing\n";
     },
+    // Real filesystem publication failure: Client/Caller.php is published first, then the class move into
+    // a deliberately non-writable existing destination directory fails. The transaction must restore both files.
+    'publication-rollback' => static function () use ($build, $map, $edit, $composer): void {
+        $dir = fixture([
+            'composer.json' => $composer,
+            'src/Client/Caller.php' => php("use App\\Legacy\\Service;\n\nfinal class Caller\n{\n    public function make(): Service\n    {\n        return new Service();\n    }\n}", 'App\\Client'),
+            'src/Legacy/Service.php' => php("final class Service\n{\n}", 'App\\Legacy'),
+            'src/Modern/.keep' => "\n",
+        ]);
+        $build($dir);
+        must($dir, $map . " class-move-plan 'App\\Legacy\\Service' 'App\\Modern\\Service' --index .agent-map/php-symbols.json --format json > plan.json");
+        $before = snapshot($dir);
+
+        $destinationDirectory = $dir . '/src/Modern';
+        if (!chmod($destinationDirectory, 0o555)) {
+            fwrite(STDERR, "publication-rollback: unable to make destination directory read-only.\n");
+            exit(1);
+        }
+        clearstatcache(true, $destinationDirectory);
+        if (is_writable($destinationDirectory)) {
+            chmod($destinationDirectory, 0o775);
+            fwrite(STDERR, "publication-rollback: environment still considers the read-only destination writable.\n");
+            exit(1);
+        }
+
+        [$code, $out] = sh($dir, $edit . ' apply plan.json --task ROLLBACK');
+        chmod($destinationDirectory, 0o775);
+        if ($code === 0 || !str_contains($out, 'every source file was restored')) {
+            fwrite(STDERR, "publication-rollback: expected rollback-success failure, got {$code}:\n{$out}\n");
+            exit(1);
+        }
+
+        if (snapshot($dir) !== $before) {
+            fwrite(STDERR, "publication-rollback: source snapshot changed after rollback.\n");
+            exit(1);
+        }
+        if (!is_file($dir . '/src/Legacy/Service.php') || is_file($dir . '/src/Modern/Service.php')) {
+            fwrite(STDERR, "publication-rollback: class move was not fully rolled back.\n");
+            exit(1);
+        }
+        assertContains($dir, 'src/Client/Caller.php', 'use App\\Legacy\\Service;');
+
+        $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir . '/src', FilesystemIterator::SKIP_DOTS));
+        foreach ($iterator as $file) {
+            if (str_contains($file->getFilename(), '.agent-edit-plan-')) {
+                fwrite(STDERR, "publication-rollback: temporary publication artifact remains: {$file->getPathname()}\n");
+                exit(1);
+            }
+        }
+
+        $receiptPath = $dir . '/.agent-edit/receipts/ROLLBACK/execution.json';
+        $receipt = json_decode((string) file_get_contents($receiptPath), true, 512, JSON_THROW_ON_ERROR);
+        if (
+            ($receipt['status'] ?? null) !== 'runner_failed'
+            || ($receipt['runner']['exit_code'] ?? null) !== 1
+            || ($receipt['changed_files'] ?? null) !== []
+            || ($receipt['changed_files_source'] ?? null) !== 'git_status_diff'
+        ) {
+            fwrite(STDERR, "publication-rollback: failure receipt does not prove a clean rollback: " . json_encode($receipt) . "\n");
+            exit(1);
+        }
+
+        [$gitCode, $gitOut] = sh($dir, 'git status --porcelain -- src');
+        if ($gitCode !== 0 || trim($gitOut) !== '') {
+            fwrite(STDERR, "publication-rollback: Git still observes source changes after rollback:\n{$gitOut}\n");
+            exit(1);
+        }
+
+        echo "ok   publication-rollback (real filesystem failure + runner_failed receipt)\n";
+    },
 ];
 
 $requested = array_slice($argv, 1);
