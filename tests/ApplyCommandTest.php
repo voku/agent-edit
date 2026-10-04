@@ -11,6 +11,7 @@ use RecursiveIteratorIterator;
 use voku\AgentEdit\Cli\CliApplication;
 use voku\AgentEdit\Apply\MutationLock;
 use voku\AgentEdit\Cli\ApplyCommand;
+use voku\AgentEdit\EditEngine;
 use voku\AgentEdit\Apply\RenamePlanApplier;
 use voku\AgentMap\Index\AgentMapIndex;
 use voku\AgentMap\Index\IndexWriter;
@@ -118,7 +119,10 @@ PHP);
                 return rename($from, $to);
             },
         );
-        $command = new ApplyCommand($this->root, applier: $applier, mutationLock: $lock);
+        $command = new ApplyCommand($this->root, new EditEngine(
+            mutationLock: $lock,
+            applierOverrides: [RenamePlanApplier::class => $applier],
+        ));
 
         ob_start();
         $exit = $command->run([

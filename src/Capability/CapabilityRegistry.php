@@ -5,6 +5,16 @@ declare(strict_types=1);
 namespace voku\AgentEdit\Capability;
 
 use InvalidArgumentException;
+use voku\AgentEdit\Apply\ClassConstantRemovalPlanApplier;
+use voku\AgentEdit\Apply\ClassMovePlanApplier;
+use voku\AgentEdit\Apply\MethodMovePlanApplier;
+use voku\AgentEdit\Apply\MethodRemovalPlanApplier;
+use voku\AgentEdit\Apply\PropertyRemovalPlanApplier;
+use voku\AgentEdit\Apply\RenamePlanApplier;
+use voku\AgentEdit\Verify\ClassConstantRemovalVerifier;
+use voku\AgentEdit\Verify\EditMovePlanVerifier;
+use voku\AgentEdit\Verify\MethodRemovalVerifier;
+use voku\AgentEdit\Verify\PropertyRemovalVerifier;
 
 /**
  * Single owner of the executable plan allowlist. Routing, `agent-edit capabilities` and the verify dispatcher
@@ -19,24 +29,37 @@ final readonly class CapabilityRegistry
     {
         $capabilities = [];
         foreach (['method', 'function', 'class', 'property', 'class_constant', 'parameter'] as $kind) {
-            $type = $kind . '_rename_plan';
             $capabilities[] = new PlanCapability(
-                $type,
+                $kind . '_rename_plan',
                 ['1.0'],
                 in_array($kind, ['method', 'function', 'parameter', 'property'], true),
                 $kind === 'class',
                 'rename-plan',
+                RenamePlanApplier::class,
+                EditMovePlanVerifier::class,
             );
         }
 
         // class_move_plan@1.0 requires PHPStan only when its own provenance names a +phpstan backend.
-        $capabilities[] = new PlanCapability('class_move_plan', ['1.0'], false, true, 'class-move-plan');
-        $capabilities[] = new PlanCapability('method_move_plan', ['1.0'], true, false, 'method-move-plan');
-        $capabilities[] = new PlanCapability('method_removal_plan', ['1.0'], true, false, 'method-removal-plan');
-        $capabilities[] = new PlanCapability('property_removal_plan', ['1.0'], true, false, 'property-removal-plan');
-        $capabilities[] = new PlanCapability('class_constant_removal_plan', ['1.0'], true, false, 'class-constant-removal-plan');
+        $capabilities[] = new PlanCapability('class_move_plan', ['1.0'], false, true, 'class-move-plan', ClassMovePlanApplier::class, EditMovePlanVerifier::class);
+        $capabilities[] = new PlanCapability('method_move_plan', ['1.0'], true, false, 'method-move-plan', MethodMovePlanApplier::class, EditMovePlanVerifier::class);
+        $capabilities[] = new PlanCapability('method_removal_plan', ['1.0'], true, false, 'method-removal-plan', MethodRemovalPlanApplier::class, MethodRemovalVerifier::class);
+        $capabilities[] = new PlanCapability('property_removal_plan', ['1.0'], true, false, 'property-removal-plan', PropertyRemovalPlanApplier::class, PropertyRemovalVerifier::class);
+        $capabilities[] = new PlanCapability('class_constant_removal_plan', ['1.0'], true, false, 'class-constant-removal-plan', ClassConstantRemovalPlanApplier::class, ClassConstantRemovalVerifier::class);
 
         return $capabilities;
+    }
+
+    /** Routes a persisted `execution.json` runner identity back to its capability. */
+    public function findByRunner(string $runner): ?PlanCapability
+    {
+        foreach ($this->all() as $capability) {
+            if ($capability->runner === $runner) {
+                return $capability;
+            }
+        }
+
+        return null;
     }
 
     public function find(string $planType): ?PlanCapability

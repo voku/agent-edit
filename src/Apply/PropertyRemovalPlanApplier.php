@@ -9,7 +9,7 @@ use Closure;
 use voku\AgentMap\Index\AgentMapIndex;
 
 /** Property-removal adapter over the shared exact edit/move host transaction. */
-final readonly class PropertyRemovalPlanApplier
+final readonly class PropertyRemovalPlanApplier implements PlanApplier
 {
     private EditMovePlanApplier $applier;
 

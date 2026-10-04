@@ -7,7 +7,8 @@ namespace voku\AgentEdit\Tests;
 use PHPUnit\Framework\TestCase;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
-use voku\AgentEdit\Verify\RefactorVerifyCommand;
+use voku\AgentEdit\Cli\VerifyCommand;
+use voku\AgentEdit\EditEngine;
 use voku\AgentEdit\Apply\RenamePlanApplier;
 use voku\AgentMap\Index\AgentMapIndex;
 use voku\AgentMap\Index\IndexWriter;
@@ -52,7 +53,7 @@ PHP);
     {
         $bundle = $this->prepareAppliedClassRename();
 
-        $exit = (new RefactorVerifyCommand($this->root))->run([
+        $exit = (new VerifyCommand($this->root))->run([
             '--bundle=.agent-edit/receipts/RENAME-1',
             '--map-index=.agent-map/php-symbols.json',
             '--map-root=.',
@@ -68,7 +69,7 @@ PHP);
 
     public function testVerifiesWhenAnUnrelatedEditAboveTheTokenShiftedItsOffset(): void
     {
-        // The real case this missed: a governed rename is applied, then a resolved docblock
+        // The real case this missed: a rename is applied, then a resolved docblock
         // above the renamed token is deleted by hand. Every plan offset below that deletion shifts,
         // although the rename itself is exactly what the plan published.
         $bundle = $this->prepareAppliedClassRename();
@@ -77,7 +78,7 @@ PHP);
         file_put_contents($path, str_replace("declare(strict_types=1);\n\n", '', $source));
         $this->rebuildMap();
 
-        $exit = (new RefactorVerifyCommand($this->root))->run([
+        $exit = (new VerifyCommand($this->root))->run([
             '--bundle=.agent-edit/receipts/RENAME-1',
             '--map-index=.agent-map/php-symbols.json',
             '--map-root=.',
@@ -96,7 +97,7 @@ PHP);
         file_put_contents($path, str_replace('RenamedService', 'SomethingElse', $source));
         $this->rebuildMap();
 
-        $exit = (new RefactorVerifyCommand($this->root))->run([
+        $exit = (new VerifyCommand($this->root))->run([
             '--bundle=.agent-edit/receipts/RENAME-1',
             '--map-index=.agent-map/php-symbols.json',
             '--map-root=.',
@@ -119,7 +120,7 @@ PHP);
         $bundle = $this->prepareAppliedClassRename();
         file_put_contents($this->root . '/src/RenamedService.php', "\n// changed after apply\n", FILE_APPEND);
 
-        $exit = (new RefactorVerifyCommand($this->root))->run([
+        $exit = (new VerifyCommand($this->root))->run([
             '--bundle=.agent-edit/receipts/RENAME-1',
             '--map-index=.agent-map/php-symbols.json',
             '--map-root=.',

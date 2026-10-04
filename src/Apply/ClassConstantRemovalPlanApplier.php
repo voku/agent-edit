@@ -9,7 +9,7 @@ use Closure;
 use voku\AgentMap\Index\AgentMapIndex;
 
 /** Class-constant-removal adapter over the shared exact edit/move host transaction. */
-final readonly class ClassConstantRemovalPlanApplier
+final readonly class ClassConstantRemovalPlanApplier implements PlanApplier
 {
     private EditMovePlanApplier $applier;
 

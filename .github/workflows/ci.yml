@@ -35,4 +35,9 @@ jobs:
           coverage: none
           tools: composer:v2
       - run: composer install --no-interaction --prefer-dist
-      - run: php tools/map-edit-dogfood.php
+      - name: Prove agent-loop is not installed (not even transitively)
+        run: |
+          test ! -d vendor/voku/agent-loop
+          ! composer show 'voku/agent-loop' 2>/dev/null
+      - name: Dogfood rename, class rename, class move, method move, stale plan, tampered plan
+        run: php tools/map-edit-dogfood.php

@@ -8,7 +8,8 @@ use PHPUnit\Framework\TestCase;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use voku\AgentEdit\Apply\PropertyRemovalPlanApplier;
-use voku\AgentEdit\Verify\PropertyRemovalVerifyCommand;
+use voku\AgentEdit\Cli\VerifyCommand;
+use voku\AgentEdit\EditEngine;
 use voku\AgentMap\Index\AgentMapIndex;
 use voku\AgentMap\Index\IndexWriter;
 use voku\AgentEdit\Tests\Support\CachedAgentMapBuilder;
@@ -134,7 +135,7 @@ PHP);
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n");
 
         ob_start();
-        $exit = (new PropertyRemovalVerifyCommand($this->root))->run([
+        $exit = (new VerifyCommand($this->root))->run([
             '--bundle=bundle',
             '--map-index=map.json',
             '--map-root=.',
@@ -142,7 +143,7 @@ PHP);
         ob_end_clean();
 
         self::assertSame(2, $exit);
-        self::assertFileDoesNotExist($this->root . '/bundle/' . PropertyRemovalVerifyCommand::FILE_NAME);
+        self::assertFileDoesNotExist($this->root . '/bundle/' . EditEngine::VERIFICATION_FILE);
     }
 
     private function declaresProperty(AgentMapIndex $map, string $targetId): bool

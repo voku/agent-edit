@@ -9,7 +9,7 @@ use Closure;
 use voku\AgentMap\Index\AgentMapIndex;
 
 /** Rename-family adapter over the shared exact edit/move host transaction. */
-final readonly class RenamePlanApplier
+final readonly class RenamePlanApplier implements PlanApplier
 {
     private EditMovePlanApplier $applier;
 

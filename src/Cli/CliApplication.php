@@ -8,7 +8,7 @@ use HelgeSverre\Toon\Toon;
 use InvalidArgumentException;
 use JsonException;
 use voku\AgentEdit\Capability\CapabilityRegistry;
-use voku\AgentEdit\Verify\RefactorVerifyDispatchCommand;
+
 
 /** Thin CLI over the package API: `apply`, `verify` and `capabilities`. */
 final readonly class CliApplication
@@ -28,7 +28,7 @@ final readonly class CliApplication
 
         return match ($command) {
             'apply' => (new ApplyCommand($this->projectRoot))->run($rest),
-            'verify' => (new RefactorVerifyDispatchCommand($this->projectRoot))->run($rest),
+            'verify' => (new VerifyCommand($this->projectRoot))->run($rest),
             'capabilities' => $this->capabilitiesCommand($rest),
             'help', '--help', '-h' => $this->help(),
             default => $this->unknown($command),

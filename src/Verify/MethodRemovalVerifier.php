@@ -14,41 +14,11 @@ use voku\AgentMap\Index\AgentMapIndex;
 use voku\AgentMap\Index\IndexReader;
 
 /** Verifies one applied method-removal bundle against current source and Map evidence. */
-final readonly class MethodRemovalVerifyCommand
+final readonly class MethodRemovalVerifier implements BundleVerifier
 {
-    public const FILE_NAME = 'verification-result.json';
-
     public function __construct(
-        private string $projectRoot,
         private IndexReader $reader = new IndexReader(),
     ) {
-    }
-
-    /** @param list<string> $tokens */
-    public function run(array $tokens): int
-    {
-        if (in_array($tokens[0] ?? '', ['help', '--help', '-h'], true)) {
-            echo $this->help();
-
-            return 0;
-        }
-
-        try {
-            $options = $this->options($tokens);
-            $result = $this->verify($options['bundle'], $options['map_index'], $options['map_root']);
-            $this->write($options['bundle'] . '/' . self::FILE_NAME, $this->json($result));
-        } catch (Throwable $exception) {
-            fwrite(STDERR, '[ERROR] ' . $exception->getMessage() . "\n");
-
-            return 2;
-        }
-
-        echo "Method removal verification: passed\n";
-        echo '- bundle: ' . $options['bundle'] . "\n";
-        echo '- target: ' . $result['plan']['target_id'] . "\n";
-        echo '- result: ' . $options['bundle'] . '/' . self::FILE_NAME . "\n";
-
-        return 0;
     }
 
     /**
@@ -63,7 +33,7 @@ final readonly class MethodRemovalVerifyCommand
      *   checks: array{execution_binding: string, current_map: string, changed_files: string, target_absent: string, source_hashes: string}
      * }
      */
-    private function verify(string $bundle, string $mapIndex, string $mapRoot): array
+    public function verify(string $bundle, string $mapIndex, string $mapRoot): array
     {
         $execution = $this->readJson($bundle . '/execution.json');
         if (($execution['status'] ?? null) !== 'runner_succeeded'
@@ -170,47 +140,6 @@ final readonly class MethodRemovalVerifyCommand
         ];
     }
 
-    /**
-     * @param list<string> $tokens
-     * @return array{bundle: string, map_index: string, map_root: string}
-     */
-    private function options(array $tokens): array
-    {
-        /** @var array<string, string> $values */
-        $values = [];
-        for ($index = 0, $count = count($tokens); $index < $count; ++$index) {
-            $token = $tokens[$index];
-            if (!str_starts_with($token, '--')) {
-                throw new RuntimeException('Unexpected method removal verify argument: ' . $token);
-            }
-            $raw = substr($token, 2);
-            if (str_contains($raw, '=')) {
-                [$name, $value] = explode('=', $raw, 2);
-            } else {
-                $name = $raw;
-                $value = $tokens[$index + 1] ?? null;
-                if (!is_string($value) || str_starts_with($value, '--')) {
-                    throw new RuntimeException('Missing value for method removal verify option: --' . $name);
-                }
-                ++$index;
-            }
-            if (!in_array($name, ['bundle', 'map-index', 'map-root'], true) || $value === '' || isset($values[$name])) {
-                throw new RuntimeException('Invalid or duplicate method removal verify option: --' . $name);
-            }
-            $values[$name] = $value;
-        }
-
-        $root = realpath($this->projectRoot);
-        if (!is_string($root)) {
-            throw new RuntimeException('Project root not found: ' . $this->projectRoot);
-        }
-        $bundle = $this->insideExistingDirectory($root, $values['bundle'] ?? '', 'bundle');
-        $mapIndex = $this->insideExistingFile($root, $values['map-index'] ?? MapArtifactPaths::forProject($root)->indexJson(), 'map index');
-        $mapRoot = $this->insideExistingDirectory($root, $values['map-root'] ?? '.', 'map root');
-
-        return ['bundle' => $bundle, 'map_index' => $mapIndex, 'map_root' => $mapRoot];
-    }
-
     /** @return array<string, mixed> */
     private function decodePlan(string $path, string $raw): array
     {
@@ -270,45 +199,6 @@ final readonly class MethodRemovalVerifyCommand
         return $decoded;
     }
 
-    private function insideExistingFile(string $root, string $path, string $label): string
-    {
-        $resolved = $this->insidePath($root, $path, $label);
-        if (!is_file($resolved)) {
-            throw new RuntimeException('Method removal verify ' . $label . ' not found: ' . $path);
-        }
-
-        return $resolved;
-    }
-
-    private function insideExistingDirectory(string $root, string $path, string $label): string
-    {
-        if ($path === '') {
-            throw new RuntimeException('Method removal verify requires --' . str_replace(' ', '-', $label) . '.');
-        }
-        $resolved = $this->insidePath($root, $path, $label);
-        if (!is_dir($resolved)) {
-            throw new RuntimeException('Method removal verify ' . $label . ' not found: ' . $path);
-        }
-
-        return $resolved;
-    }
-
-    private function insidePath(string $root, string $path, string $label): string
-    {
-        $candidate = str_starts_with($path, '/') ? $path : $root . '/' . $path;
-        $real = realpath($candidate);
-        if (!is_string($real)) {
-            throw new RuntimeException('Method removal verify ' . $label . ' not found: ' . $path);
-        }
-        $root = rtrim(str_replace('\\', '/', $root), '/');
-        $real = str_replace('\\', '/', $real);
-        if ($real !== $root && !str_starts_with($real, $root . '/')) {
-            throw new RuntimeException('Method removal verify ' . $label . ' escapes the project root.');
-        }
-
-        return $real;
-    }
-
     private function relativePath(string $path): string
     {
         $path = str_replace('\\', '/', trim($path));
@@ -324,35 +214,4 @@ final readonly class MethodRemovalVerifyCommand
         return $path;
     }
 
-    private function write(string $path, string $content): void
-    {
-        $temporary = $path . '.tmp-' . getmypid();
-        if (file_put_contents($temporary, $content) === false) {
-            throw new RuntimeException('Unable to write method removal verification result: ' . $temporary);
-        }
-        if (!rename($temporary, $path)) {
-            if (is_file($temporary) && !unlink($temporary)) {
-                throw new RuntimeException('Unable to publish method removal verification result and cleanup temporary file: ' . $path);
-            }
-            throw new RuntimeException('Unable to publish method removal verification result: ' . $path);
-        }
-    }
-
-    /** @param array<string, mixed> $payload */
-    private function json(array $payload): string
-    {
-        return json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR) . "\n";
-    }
-
-    private function help(): string
-    {
-        return <<<'TXT'
-Usage:
-  agent-edit verify --bundle=.agent-edit/receipts/LABEL [--map-index PATH] [--map-root PATH]
-
-For a method-removal execution, verifies immutable plan binding, exact observed changed-file scope,
-a current PHPStan-backed Map whose hashes match source, and that the removed method ID is absent.
-
-TXT;
-    }
 }

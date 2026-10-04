@@ -18,43 +18,12 @@ use voku\AgentMap\Index\AgentMapIndex;
 use voku\AgentMap\Index\IndexReader;
 
 /** Verifies one applied edit/move refactor bundle against current source and Map evidence. */
-final readonly class RefactorVerifyCommand
+final readonly class EditMovePlanVerifier implements BundleVerifier
 {
-    public const FILE_NAME = 'verification-result.json';
-
     /** Wires verification to the project root and Map reader. */
     public function __construct(
-        private string $projectRoot,
         private IndexReader $reader = new IndexReader(),
     ) {
-    }
-
-    /** @param list<string> $tokens */
-    public function run(array $tokens): int
-    {
-        if (in_array($tokens[0] ?? '', ['help', '--help', '-h'], true)) {
-            echo $this->help();
-
-            return 0;
-        }
-
-        try {
-            $options = $this->options($tokens);
-            $result = $this->verify($options['bundle'], $options['map_index'], $options['map_root']);
-            $this->write($options['bundle'] . '/' . self::FILE_NAME, $this->json($result));
-        } catch (Throwable $exception) {
-            fwrite(STDERR, '[ERROR] ' . $exception->getMessage() . "\n");
-
-            return 2;
-        }
-
-        echo "Refactor verification: passed\n";
-        echo '- bundle: ' . $options['bundle'] . "\n";
-        echo '- plan: ' . $result['plan']['type'] . '@' . $result['plan']['contract_version'] . "\n";
-        echo '- target: ' . $result['plan']['target_id'] . "\n";
-        echo '- result: ' . $options['bundle'] . '/' . self::FILE_NAME . "\n";
-
-        return 0;
     }
 
     /**
@@ -69,7 +38,7 @@ final readonly class RefactorVerifyCommand
      *   checks: array{execution_binding: string, current_map: string, changed_files: string, replacements: string, moves: string}
      * }
      */
-    private function verify(string $bundle, string $mapIndex, string $mapRoot): array
+    public function verify(string $bundle, string $mapIndex, string $mapRoot): array
     {
         $execution = $this->readJson($bundle . '/execution.json');
         if (($execution['status'] ?? null) !== 'runner_succeeded'
@@ -270,46 +239,6 @@ final readonly class RefactorVerifyCommand
         };
     }
 
-    /**
-     * @param list<string> $tokens
-     * @return array{bundle: string, map_index: string, map_root: string}
-     */
-    private function options(array $tokens): array
-    {
-        $values = [];
-        for ($index = 0, $count = count($tokens); $index < $count; ++$index) {
-            $token = $tokens[$index];
-            if (!str_starts_with($token, '--')) {
-                throw new RuntimeException('Unexpected refactor verify argument: ' . $token);
-            }
-            $raw = substr($token, 2);
-            if (str_contains($raw, '=')) {
-                [$name, $value] = explode('=', $raw, 2);
-            } else {
-                $name = $raw;
-                $value = $tokens[$index + 1] ?? null;
-                if (!is_string($value) || str_starts_with($value, '--')) {
-                    throw new RuntimeException('Missing value for refactor verify option: --' . $name);
-                }
-                ++$index;
-            }
-            if (!in_array($name, ['bundle', 'map-index', 'map-root'], true) || $value === '' || isset($values[$name])) {
-                throw new RuntimeException('Invalid or duplicate refactor verify option: --' . $name);
-            }
-            $values[$name] = $value;
-        }
-
-        $root = realpath($this->projectRoot);
-        if (!is_string($root)) {
-            throw new RuntimeException('Project root not found: ' . $this->projectRoot);
-        }
-        $bundle = $this->insideExistingDirectory($root, $values['bundle'] ?? '', 'bundle');
-        $mapIndex = $this->insideExistingFile($root, $values['map-index'] ?? MapArtifactPaths::forProject($root)->indexJson(), 'map index');
-        $mapRoot = $this->insideExistingDirectory($root, $values['map-root'] ?? '.', 'map root');
-
-        return ['bundle' => $bundle, 'map_index' => $mapIndex, 'map_root' => $mapRoot];
-    }
-
     /** @return array<string, mixed> */
     private function decodePlan(string $path, string $raw): array
     {
@@ -372,48 +301,6 @@ final readonly class RefactorVerifyCommand
         return $decoded;
     }
 
-    /** Resolves one required verification input file inside the project root. */
-    private function insideExistingFile(string $root, string $path, string $label): string
-    {
-        $resolved = $this->insidePath($root, $path, $label);
-        if (!is_file($resolved)) {
-            throw new RuntimeException('Refactor verify ' . $label . ' not found: ' . $path);
-        }
-
-        return $resolved;
-    }
-
-    /** Resolves one required verification input directory inside the project root. */
-    private function insideExistingDirectory(string $root, string $path, string $label): string
-    {
-        if ($path === '') {
-            throw new RuntimeException('Refactor verify requires --' . str_replace(' ', '-', $label) . '.');
-        }
-        $resolved = $this->insidePath($root, $path, $label);
-        if (!is_dir($resolved)) {
-            throw new RuntimeException('Refactor verify ' . $label . ' not found: ' . $path);
-        }
-
-        return $resolved;
-    }
-
-    /** Canonicalizes one verification path and rejects project-root escapes. */
-    private function insidePath(string $root, string $path, string $label): string
-    {
-        $candidate = str_starts_with($path, '/') ? $path : $root . '/' . $path;
-        $real = realpath($candidate);
-        if (!is_string($real)) {
-            throw new RuntimeException('Refactor verify ' . $label . ' not found: ' . $path);
-        }
-        $root = rtrim(str_replace('\\', '/', $root), '/');
-        $real = str_replace('\\', '/', $real);
-        if ($real !== $root && !str_starts_with($real, $root . '/')) {
-            throw new RuntimeException('Refactor verify ' . $label . ' escapes the project root.');
-        }
-
-        return $real;
-    }
-
     /** Normalizes and validates one project-relative changed-file path. */
     private function relativePath(string $path): string
     {
@@ -431,42 +318,4 @@ final readonly class RefactorVerifyCommand
         return implode('/', $segments);
     }
 
-    /** Atomically writes the verification result by renaming a same-directory staging file. */
-    private function write(string $path, string $content): void
-    {
-        $temporary = $path . '.tmp-' . getmypid();
-        if (file_put_contents($temporary, $content) === false) {
-            throw new RuntimeException('Unable to write refactor verification result: ' . $temporary);
-        }
-        if (!rename($temporary, $path)) {
-            if (is_file($temporary)) {
-                unlink($temporary);
-            }
-            throw new RuntimeException('Unable to publish refactor verification result: ' . $path);
-        }
-    }
-
-    /** @param array<string, mixed> $payload */
-    private function json(array $payload): string
-    {
-        return json_encode(
-            $payload,
-            JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR,
-        ) . "\n";
-    }
-
-    /** Returns the read-only verification CLI help text. */
-    private function help(): string
-    {
-        return <<<'TXT'
-Usage:
-  agent-edit verify --bundle=.agent-edit/receipts/LABEL [--map-index PATH] [--map-root PATH]
-
-Read-only verification for one successfully applied Map 0.9 edit/move refactor bundle. It requires
-independently observed changed-file evidence, rebinds the current Map to the runtime root, enforces
-the loaded plan contract's backend requirement, verifies every final replacement token and file move,
-and binds current Map file hashes to the rewritten sources before writing verification-result.json.
-
-TXT;
-    }
 }

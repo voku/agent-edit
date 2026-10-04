@@ -4,45 +4,25 @@ declare(strict_types=1);
 
 namespace voku\AgentEdit\Cli;
 
-use voku\AgentEdit\Apply\RenamePlanApplier;
-use voku\AgentEdit\Apply\EditResult;
-use voku\AgentEdit\Apply\MethodRemovalPlanApplier;
-use voku\AgentEdit\Apply\MutationLock;
-use voku\AgentEdit\Apply\WorkingTreeSnapshotter;
-use voku\AgentEdit\Apply\MethodMovePlanApplier;
-use voku\AgentEdit\Apply\ClassMovePlanApplier;
-use voku\AgentEdit\Apply\PropertyRemovalPlanApplier;
-use voku\AgentEdit\Apply\ClassConstantRemovalPlanApplier;
 use Closure;
-use HelgeSverre\Toon\Toon;
 use InvalidArgumentException;
-use JsonException;
 use RuntimeException;
 use Throwable;
-use voku\AgentMap\Index\IndexReader;
+use voku\AgentEdit\EditEngine;
+use voku\AgentEdit\Receipt\ApplyRequest;
 use voku\AgentMap\MapArtifactPaths;
 
 /** CLI boundary for consuming one already-produced, versioned agent-map refactor plan. */
 final readonly class ApplyCommand
 {
     /**
-     * Wires the deterministic mutation boundary to project-local evidence services.
-     *
-     * @param (Closure(string): void)|null $beforeMutation Host authorization hook called with the task label before any
-     *                                                    non-dry-run mutation; it must throw to refuse the write.
+     * @param (Closure(string): void)|null $authorizeMutation host authorization hook called with the label before any
+     *                                                       non-dry-run write; it must throw to refuse the write
      */
     public function __construct(
         private string $projectRoot,
-        private RenamePlanApplier $applier = new RenamePlanApplier(),
-        private ClassMovePlanApplier $classMoveApplier = new ClassMovePlanApplier(),
-        private MethodMovePlanApplier $methodMoveApplier = new MethodMovePlanApplier(),
-        private MethodRemovalPlanApplier $removalApplier = new MethodRemovalPlanApplier(),
-        private PropertyRemovalPlanApplier $propertyRemovalApplier = new PropertyRemovalPlanApplier(),
-        private ClassConstantRemovalPlanApplier $classConstantRemovalApplier = new ClassConstantRemovalPlanApplier(),
-        private MutationLock $mutationLock = new MutationLock(),
-        private IndexReader $reader = new IndexReader(),
-        private WorkingTreeSnapshotter $snapshotter = new WorkingTreeSnapshotter(),
-        private ?Closure $beforeMutation = null,
+        private EditEngine $engine = new EditEngine(),
+        private ?Closure $authorizeMutation = null,
     ) {
     }
 
@@ -55,105 +35,24 @@ final readonly class ApplyCommand
 
         try {
             $request = $this->parse($tokens);
-            $this->ensureDirectory($request['output_directory']);
-            $before = $this->snapshotter->capture($this->projectRoot);
+            $receipt = $this->engine->applyWithReceipt(new ApplyRequest(
+                repositoryRoot: $this->projectRoot,
+                planPath: $request['plan'],
+                mapIndexPath: $request['map_index'],
+                mapRoot: $request['map_root'],
+                outputDirectory: $request['output_directory'],
+                label: $request['task_id'],
+                dryRun: $request['dry_run'],
+                authorizeMutation: $this->authorizeMutation,
+            ));
 
-            /** @var array<string, mixed>|null $plan */
-            $plan = null;
-            $planSha256 = null;
-            $mapDigest = null;
-            $mapIndexSha256 = null;
+            echo "Refactor execution bundle prepared: {$receipt->bundleDirectory}\n";
+            echo '- plan: ' . ($receipt->planType !== '' ? $receipt->planType : 'unknown') . "\n";
+            echo '- target: ' . ($receipt->targetId !== '' ? $receipt->targetId : 'unknown') . "\n";
+            echo "- status: {$receipt->status}\n";
+            echo "- execution: {$receipt->receiptPath}\n";
 
-            $operation = function () use ($request, &$plan, &$planSha256, &$mapDigest, &$mapIndexSha256): EditResult {
-                [$plan, $planSha256] = $this->readPlan($request['plan']);
-                $map = $this->reader->read($request['map_index']);
-                $mapDigest = $map->mapDigest();
-                $rawMapHash = hash_file('sha256', $request['map_index']);
-                if (!is_string($rawMapHash)) {
-                    throw new RuntimeException('Unable to hash agent-map index: ' . $request['map_index']);
-                }
-                $mapIndexSha256 = 'sha256:' . $rawMapHash;
-                $applier = match ($plan['type'] ?? null) {
-                    'class_move_plan' => $this->classMoveApplier,
-                    'method_move_plan' => $this->methodMoveApplier,
-                    'method_removal_plan' => $this->removalApplier,
-                    'property_removal_plan' => $this->propertyRemovalApplier,
-                    'class_constant_removal_plan' => $this->classConstantRemovalApplier,
-                    default => $this->applier,
-                };
-
-                if ($request['dry_run']) {
-                    $prepared = $applier->preflight($plan, $map, $request['map_root']);
-
-                    return new EditResult(
-                        status: 'prepared',
-                        exitCode: 0,
-                        stdout: sprintf(
-                            "%s validated %d edit(s) and %d move(s); no source was changed.\n",
-                            $prepared['plan_type'],
-                            $prepared['edit_count'],
-                            $prepared['move_count'],
-                        ),
-                    );
-                }
-
-                return $applier->apply($plan, $map, $request['map_root']);
-            };
-
-            if ($request['dry_run']) {
-                $result = $operation();
-            } else {
-                if ($this->beforeMutation !== null) {
-                    ($this->beforeMutation)($request['task_id']);
-                }
-                $result = $this->mutationLock->synchronized($this->projectRoot, $operation);
-            }
-
-            if (!is_array($plan) || !is_string($planSha256) || !is_string($mapDigest) || !is_string($mapIndexSha256)) {
-                throw new RuntimeException('Refactor execution completed without complete plan/map evidence.');
-            }
-
-            $after = $this->snapshotter->capture($this->projectRoot);
-            $executionPath = $request['output_directory'] . '/execution.json';
-            $runnerName = match ($plan['type'] ?? null) {
-                'class_move_plan' => 'class-move-plan',
-                'method_move_plan' => 'method-move-plan',
-                'method_removal_plan' => 'method-removal-plan',
-                'property_removal_plan' => 'property-removal-plan',
-                'class_constant_removal_plan' => 'class-constant-removal-plan',
-                default => 'rename-plan',
-            };
-            $this->write($executionPath, $this->json([
-                'schema_version' => '1.0',
-                'status' => $result->status,
-                'task_id' => $request['task_id'],
-                'plan' => [
-                    'path' => $request['plan'],
-                    'sha256' => $planSha256,
-                    'type' => $plan['type'] ?? null,
-                    'contract_version' => $plan['contract_version'] ?? null,
-                    'target_id' => $plan['target_id'] ?? null,
-                ],
-                'map_digest' => $mapDigest,
-                'map_index_sha256' => $mapIndexSha256,
-                'runner' => [
-                    'name' => $runnerName,
-                    'exit_code' => $result->exitCode,
-                    'dry_run' => $request['dry_run'],
-                    'model_input_tokens' => 0,
-                    'model_tool_calls' => 0,
-                ],
-                'changed_files' => $after->changedPathsSince($before),
-                'changed_files_source' => $before->available && $after->available ? 'git_status_diff' : 'unavailable',
-            ]));
-
-            echo "Refactor execution bundle prepared: {$request['output_directory']}\n";
-            echo '- plan: ' . (string) ($plan['type'] ?? 'unknown') . "\n";
-            echo '- target: ' . (string) ($plan['target_id'] ?? 'unknown') . "\n";
-            echo "- status: {$result->status}\n";
-            echo "- execution: {$executionPath}\n";
-
-            return $result->succeeded() ? 0 : 1;
+            return $receipt->succeeded() ? 0 : 1;
         } catch (Throwable $exception) {
             fwrite(STDERR, '[ERROR] ' . $exception->getMessage() . "\n");
 
@@ -248,26 +147,6 @@ final readonly class ApplyCommand
         ];
     }
 
-    /** @return array{0: array<string, mixed>, 1: string} */
-    private function readPlan(string $path): array
-    {
-        $raw = file_get_contents($path);
-        if (!is_string($raw)) {
-            throw new RuntimeException('Unable to read refactor plan: ' . $path);
-        }
-
-        if (str_ends_with(strtolower($path), '.toon')) {
-            $decoded = Toon::decode($raw);
-        } else {
-            $decoded = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
-        }
-        if (!is_array($decoded)) {
-            throw new RuntimeException('Refactor plan document must decode to an object: ' . $path);
-        }
-
-        return [$decoded, 'sha256:' . hash('sha256', $raw)];
-    }
-
     /** Resolves an existing in-scope file path for a required refactor input. */
     private function existingFile(string $root, string $path, string $label): string
     {
@@ -305,43 +184,6 @@ final readonly class ApplyCommand
         }
 
         return rtrim($root, '/') . '/' . ltrim($path, '/');
-    }
-
-    /** Creates the evidence directory when it does not already exist. */
-    private function ensureDirectory(string $directory): void
-    {
-        if (!is_dir($directory) && !mkdir($directory, 0o775, true) && !is_dir($directory)) {
-            throw new RuntimeException('Unable to create refactor evidence directory: ' . $directory);
-        }
-    }
-
-    /** Atomically writes one evidence file by renaming a same-directory staging file. */
-    private function write(string $path, string $content): void
-    {
-        $this->ensureDirectory(dirname($path));
-        $temporary = $path . '.tmp-' . getmypid();
-        if (file_put_contents($temporary, $content) === false) {
-            throw new RuntimeException('Unable to write refactor evidence: ' . $temporary);
-        }
-        if (!rename($temporary, $path)) {
-            if (is_file($temporary) && !unlink($temporary)) {
-                throw new RuntimeException('Unable to publish refactor evidence and cleanup temporary file: ' . $path);
-            }
-            throw new RuntimeException('Unable to publish refactor evidence: ' . $path);
-        }
-    }
-
-    /** @param array<string, mixed> $payload */
-    private function json(array $payload): string
-    {
-        try {
-            return json_encode(
-                $payload,
-                JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR,
-            ) . "\n";
-        } catch (JsonException $exception) {
-            throw new RuntimeException('Unable to encode refactor evidence JSON: ' . $exception->getMessage(), 0, $exception);
-        }
     }
 
     /** Prints the supported agent-edit apply CLI contract. */

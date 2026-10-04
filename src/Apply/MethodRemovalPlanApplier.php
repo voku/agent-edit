@@ -9,7 +9,7 @@ use Closure;
 use voku\AgentMap\Index\AgentMapIndex;
 
 /** Method-removal adapter over the shared exact edit/move host transaction. */
-final readonly class MethodRemovalPlanApplier
+final readonly class MethodRemovalPlanApplier implements PlanApplier
 {
     private EditMovePlanApplier $applier;
 

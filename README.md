@@ -42,15 +42,28 @@ Executable contracts (all `@1.0`): `method|function|class|property|class_constan
 
 ## Package API
 
-The package API is the authority; the CLI wraps it.
+`voku\AgentEdit\EditEngine` is the only authority; `agent-edit apply|verify|capabilities` are argument/print adapters over it.
 
 ```php
 $engine = new voku\AgentEdit\EditEngine();
-$engine->preflight($plan, $map, $root);   // validate only
-$result = $engine->apply($plan, $map, $root); // lock + transactional apply
+
+$engine->preflight($plan, $map, $root);          // validate everything, write nothing
+$engine->apply($plan, $map, $root);              // mutation lock + transactional apply (no receipt)
+
+$receipt = $engine->applyWithReceipt(new ApplyRequest(
+    repositoryRoot: $root, planPath: $planFile, mapIndexPath: $mapFile, mapRoot: $root,
+    outputDirectory: $bundleDir, label: 'my-task', dryRun: false,
+    authorizeMutation: static fn (string $label) => $host->assertMayMutate($label), // must throw to refuse
+));
+
+$result = $engine->verify($root, $bundleDir, $mapFile); // after rebuilding the Map; writes verification-result.json
 ```
 
-`voku\AgentEdit\Cli\ApplyCommand` accepts a `$beforeMutation` closure so a host (for example `agent-loop`) can run its own authorization before any non-dry-run write; the closure must throw to refuse.
+Plan type and contract version are routed only through `CapabilityRegistry`. Anything it does not list (an unknown type, or a known type with an unknown `contract_version`) is rejected before any source is read.
+
+## Receipt
+
+`execution.json` inside the bundle is an **agent-edit receipt** (`schema_version` 1.0). It binds the plan file hash, Map digest, runner identity and Git-observed `changed_files`, and is what `verify` consumes. It is not owned by `agent-loop`. The names `execution.json`, `task_id` (the caller-supplied label) and `runner.name` are kept for compatibility with hosts that already read them; `model_input_tokens`/`model_tool_calls` are always `0`.
 
 ## Boundaries
 
