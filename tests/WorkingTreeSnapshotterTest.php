@@ -81,6 +81,65 @@ final class WorkingTreeSnapshotterTest extends TestCase
         self::assertSame(['src/A.php'], $snapshotter->capture($repository)->changedPathsSince($before));
     }
 
+    public function testCrLfFromGitCommandsDoesNotBecomePartOfRepositoryPaths(): void
+    {
+        $repository = $this->base . '/repo';
+        mkdir($repository . '/src', 0o775, true);
+        file_put_contents($repository . '/src/A.php', "<?php\n");
+
+        $bin = $this->base . '/fake-bin';
+        mkdir($bin, 0o775, true);
+        $fakeGit = $bin . '/git';
+        file_put_contents($fakeGit, <<<'PHP'
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+$args = array_slice($argv, 1);
+if ($args === ['rev-parse', 'HEAD']) {
+    fwrite(STDOUT, "abc\r\n");
+    exit(0);
+}
+if ($args === ['status', '--porcelain=v1', '-z', '--untracked-files=all']) {
+    fwrite(STDOUT, " M src/A.php\0");
+    exit(0);
+}
+if ($args === ['rev-parse', '--show-toplevel']) {
+    fwrite(STDOUT, (string) getenv('AGENT_EDIT_FAKE_GIT_TOPLEVEL') . "\r\n");
+    exit(0);
+}
+if ($args === ['rev-parse', '--show-prefix']) {
+    fwrite(STDOUT, "\r\n");
+    exit(0);
+}
+
+exit(1);
+PHP
+        );
+        chmod($fakeGit, 0o775);
+
+        $oldPath = getenv('PATH');
+        $oldTopLevel = getenv('AGENT_EDIT_FAKE_GIT_TOPLEVEL');
+        putenv('AGENT_EDIT_FAKE_GIT_TOPLEVEL=' . $repository);
+        putenv('PATH=' . $bin . PATH_SEPARATOR . ($oldPath === false ? '' : $oldPath));
+
+        try {
+            $snapshotter = new WorkingTreeSnapshotter();
+            $before = $snapshotter->capture($repository);
+            self::assertTrue($before->available);
+
+            file_put_contents($repository . '/src/A.php', "<?php // changed\n");
+
+            self::assertSame(['src/A.php'], $snapshotter->capture($repository)->changedPathsSince($before));
+        } finally {
+            $oldPath === false ? putenv('PATH') : putenv('PATH=' . $oldPath);
+            $oldTopLevel === false
+                ? putenv('AGENT_EDIT_FAKE_GIT_TOPLEVEL')
+                : putenv('AGENT_EDIT_FAKE_GIT_TOPLEVEL=' . $oldTopLevel);
+        }
+    }
+
     public function testRealGitChangesIncludeUntrackedAndDeletedFiles(): void
     {
         $repository = $this->base . '/repo';
