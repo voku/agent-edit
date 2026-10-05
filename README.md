@@ -69,6 +69,8 @@ Without Git the receipt falls back to a Map-scoped observation: before mutating,
 
 After an authorized mutation attempt fails, `applyWithReceipt()` first observes the post-rollback working tree and persists a `runner_failed` receipt before rethrowing the original failure. A host authorization refusal still happens before the mutation attempt and writes no receipt.
 
+A refusal that writes no receipt (dry-run preflight refusal such as a `blocked` plan, an unsupported plan type or contract version, a host authorization refusal) leaves **no bundle directory behind**: directories `applyWithReceipt()` created for the attempt are removed again if they are still empty; a bundle directory that already existed, or that holds any file, is never touched. An authorized mutation attempt that fails keeps its `runner_failed` receipt.
+
 **When the receipt itself cannot be written** (unwritable bundle directory, full disk, a blocking path), the apply outcome stays the primary signal and nothing is silent:
 
 | Situation | Behavior |
