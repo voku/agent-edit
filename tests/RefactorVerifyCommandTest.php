@@ -130,6 +130,23 @@ PHP);
         self::assertFileDoesNotExist($bundle . '/verification-result.json');
     }
 
+    public function testFailedReverificationRemovesThePreviousPassedResult(): void
+    {
+        $bundle = $this->prepareAppliedClassRename();
+        $engine = new EditEngine();
+        $result = $engine->verify($this->root, $bundle, '.agent-map/php-symbols.json');
+        self::assertSame('passed', $result['status']);
+        file_put_contents($this->root . '/src/RenamedService.php', "\n// changed after verification\n", FILE_APPEND);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('stale');
+        try {
+            $engine->verify($this->root, $bundle, '.agent-map/php-symbols.json');
+        } finally {
+            self::assertFileDoesNotExist($bundle . '/verification-result.json');
+        }
+    }
+
     private function prepareAppliedClassRename(): string
     {
         $beforeMap = CachedAgentMapBuilder::build($this->root, ['src'], []);
