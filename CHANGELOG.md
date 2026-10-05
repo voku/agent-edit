@@ -15,7 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Git-free file-move receipts now observe both the removed source and the new destination by recording validated destination absence before publication.
+- Git command path output now accepts CRLF line endings without treating the carriage return as part of the repository or project path.\n- Git-free file-move receipts now observe both the removed source and the new destination by recording validated destination absence before publication.
 - A failed verification attempt now removes the previous verification result so consumers cannot read an outdated `passed` verdict.
 - Git working-tree observations preserve whitespace in repository and project directory names, including changes to already dirty files.
 - A refusal that produces no receipt (dry-run preflight refusal of a `blocked` plan, unsupported plan type/contract version, host authorization refusal) no longer leaves an empty receipt bundle directory behind. Found by replaying a real fail-closed `method-removal-plan` against `agent-recall-compiler`: hosts that count every bundle directory of a task would read the empty one as a missing verification result.
