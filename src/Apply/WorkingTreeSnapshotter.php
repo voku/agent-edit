@@ -36,8 +36,8 @@ final readonly class WorkingTreeSnapshotter
         // Porcelain paths are always relative to the Git top level, which differs from the repository root when the
         // project is a subdirectory of a larger work tree. Hash from the top level and report root-relative paths.
         // Git appends one newline. Spaces (and even newlines) can be part of the actual directory name.
-        $base = rtrim(str_ends_with($topLevel, "\n") ? substr($topLevel, 0, -1) : $topLevel, '/');
-        $prefix = str_ends_with($prefix, "\n") ? substr($prefix, 0, -1) : $prefix;
+        $base = rtrim($this->withoutCommandLineEnding($topLevel), '/');
+        $prefix = $this->withoutCommandLineEnding($prefix);
 
         $entries = [];
         foreach ($this->parseStatus($status) as $path => $code) {
@@ -87,6 +87,19 @@ final readonly class WorkingTreeSnapshotter
         }
 
         return $entries;
+    }
+
+    /** Removes exactly the line ending added by line-oriented Git commands without trimming valid path bytes. */
+    private function withoutCommandLineEnding(string $output): string
+    {
+        if (str_ends_with($output, "\r\n")) {
+            return substr($output, 0, -2);
+        }
+        if (str_ends_with($output, "\n")) {
+            return substr($output, 0, -1);
+        }
+
+        return $output;
     }
 
     /** @param non-empty-list<string> $command */
