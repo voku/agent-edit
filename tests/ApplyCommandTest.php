@@ -211,4 +211,24 @@ PHP);
         self::assertDirectoryDoesNotExist($outside);
         self::assertSame($before, file_get_contents($this->root . '/src/Service.php'));
     }
+
+    public function testAnUnknownOptionNamesTheAcceptedOnes(): void
+    {
+        $process = proc_open(
+            [PHP_BINARY, dirname(__DIR__) . '/bin/agent-edit', 'apply', $this->planPath, '--label=X', '--map-index=' . $this->mapPath],
+            [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            $pipes,
+            $this->root,
+        );
+        self::assertIsResource($process);
+        stream_get_contents($pipes[1]);
+        $stderr = (string) stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+
+        self::assertSame(1, proc_close($process));
+        self::assertStringContainsString('Unknown option --label for `agent-edit apply`', $stderr);
+        self::assertStringContainsString('--task', $stderr);
+        self::assertStringContainsString('--dry-run', $stderr);
+    }
 }

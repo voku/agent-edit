@@ -28,7 +28,7 @@ final readonly class ClassConstantRemovalPlanDocument implements EditMovePlanEvi
             throw new RuntimeException('Unsupported agent-map class-constant removal plan contract version.');
         }
         if (($data['status'] ?? null) !== 'safe') {
-            throw new RuntimeException('Class-constant removal plan is not safe; no source was changed.');
+            throw PlanRefusal::because('Class-constant removal plan is not safe; no source was changed.', $data);
         }
 
         self::requireEmptyList($data, 'stale_evidence', 'Class-constant removal plan contains stale evidence; rebuild the map and re-plan before applying.');
@@ -137,7 +137,7 @@ final readonly class ClassConstantRemovalPlanDocument implements EditMovePlanEvi
             throw new RuntimeException('Class-constant removal plan requires ' . $key . ' list evidence.');
         }
         if ($value !== []) {
-            throw new RuntimeException($message);
+            throw PlanRefusal::because($message, $data);
         }
     }
 

@@ -91,7 +91,7 @@ final readonly class ApplyCommand
             }
             if (!str_starts_with($token, '--')) {
                 if ($plan !== null) {
-                    throw new InvalidArgumentException('Unexpected refactor argument: ' . $token);
+                    throw new InvalidArgumentException('Unexpected argument for `agent-edit apply` (exactly one plan path is accepted): ' . $token);
                 }
                 $plan = $token;
                 continue;
@@ -104,15 +104,15 @@ final readonly class ApplyCommand
                 $name = $raw;
                 $value = $tokens[$index + 1] ?? null;
                 if (!is_string($value) || str_starts_with($value, '--')) {
-                    throw new InvalidArgumentException('Missing value for refactor option: --' . $name);
+                    throw new InvalidArgumentException('Missing value for option --' . $name);
                 }
                 ++$index;
             }
             if (!in_array($name, ['task', 'map-index', 'map-root', 'output-dir'], true)) {
-                throw new InvalidArgumentException('Unknown refactor option: --' . $name);
+                throw new InvalidArgumentException('Unknown option --' . $name . ' for `agent-edit apply` (accepted: --task, --map-index, --map-root, --output-dir, --dry-run).');
             }
             if ($value === '' || isset($values[$name])) {
-                throw new InvalidArgumentException('Invalid or duplicate refactor option: --' . $name);
+                throw new InvalidArgumentException('Invalid or duplicate option --' . $name);
             }
             $values[$name] = $value;
         }
