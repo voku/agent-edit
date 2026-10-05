@@ -9,7 +9,10 @@ use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use RuntimeException;
 use voku\AgentEdit\Apply\ClassMovePlanApplier;
+use voku\AgentEdit\EditEngine;
+use voku\AgentEdit\Receipt\ApplyRequest;
 use voku\AgentMap\Index\AgentMapIndex;
+use voku\AgentMap\Index\IndexWriter;
 use voku\AgentEdit\Tests\Support\CachedAgentMapBuilder;
 
 final class ClassMovePlanConsumerTest extends TestCase
@@ -144,6 +147,36 @@ PHP);
             diagnostics: $built->diagnostics,
             fingerprint: $built->fingerprint,
         );
+    }
+
+    public function testGitFreeMoveReceiptObservesSourceAndDestination(): void
+    {
+        $map = $this->structuralMap();
+        $mapPath = $this->root . '/map.json';
+        $planPath = $this->root . '/plan.json';
+        $bundle = $this->root . '/.agent-edit/receipts/MOVE';
+        (new IndexWriter())->write($map, $mapPath);
+        file_put_contents($planPath, json_encode($this->plan($map), JSON_THROW_ON_ERROR));
+        $engine = new EditEngine();
+
+        $receipt = $engine->applyWithReceipt(new ApplyRequest(
+            repositoryRoot: $this->root,
+            planPath: $planPath,
+            mapIndexPath: $mapPath,
+            mapRoot: $this->root,
+            outputDirectory: $bundle,
+            label: 'MOVE',
+        ));
+
+        self::assertTrue($receipt->succeeded());
+        $execution = json_decode((string) file_get_contents($receipt->receiptPath), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('map_manifest_diff', $execution['changed_files_source']);
+        self::assertSame(['src/New/Service.php', 'src/Old/Service.php'], $execution['changed_files']);
+
+        (new IndexWriter())->write($this->structuralMap(), $mapPath);
+        $verification = $engine->verify($this->root, $bundle, $mapPath);
+        self::assertSame('incomplete', $verification['status']);
+        self::assertSame($execution['changed_files'], $verification['changed_files']);
     }
 
     /** @return array<string, mixed> */

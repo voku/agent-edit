@@ -51,6 +51,36 @@ final class WorkingTreeSnapshotterTest extends TestCase
         self::assertSame([], $snapshot->changedPathsSince($snapshot), 'unavailable evidence reports no paths and is told apart by `available`');
     }
 
+    public function testProjectDirectoryWhitespaceDoesNotHideChanges(): void
+    {
+        $top = $this->base . '/top';
+        $project = $top . '/ app';
+        mkdir($project . '/src', 0o775, true);
+        file_put_contents($project . '/src/A.php', "<?php\n");
+        $this->commitAll($top);
+
+        $snapshotter = new WorkingTreeSnapshotter();
+        $before = $snapshotter->capture($project);
+        file_put_contents($project . '/src/A.php', "<?php // changed\n");
+
+        self::assertSame(['src/A.php'], $snapshotter->capture($project)->changedPathsSince($before));
+    }
+
+    public function testGitRootWhitespaceDoesNotHideChangesToAnAlreadyDirtyFile(): void
+    {
+        $repository = $this->base . '/repo ';
+        mkdir($repository . '/src', 0o775, true);
+        file_put_contents($repository . '/src/A.php', "<?php\n");
+        $this->commitAll($repository);
+        file_put_contents($repository . '/src/A.php', "<?php // first change\n");
+
+        $snapshotter = new WorkingTreeSnapshotter();
+        $before = $snapshotter->capture($repository);
+        file_put_contents($repository . '/src/A.php', "<?php // second change\n");
+
+        self::assertSame(['src/A.php'], $snapshotter->capture($repository)->changedPathsSince($before));
+    }
+
     public function testRealGitChangesIncludeUntrackedAndDeletedFiles(): void
     {
         $repository = $this->base . '/repo';

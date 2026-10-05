@@ -35,8 +35,9 @@ final readonly class WorkingTreeSnapshotter
 
         // Porcelain paths are always relative to the Git top level, which differs from the repository root when the
         // project is a subdirectory of a larger work tree. Hash from the top level and report root-relative paths.
-        $base = rtrim(trim($topLevel), '/');
-        $prefix = trim($prefix);
+        // Git appends one newline. Spaces (and even newlines) can be part of the actual directory name.
+        $base = rtrim(str_ends_with($topLevel, "\n") ? substr($topLevel, 0, -1) : $topLevel, '/');
+        $prefix = str_ends_with($prefix, "\n") ? substr($prefix, 0, -1) : $prefix;
 
         $entries = [];
         foreach ($this->parseStatus($status) as $path => $code) {

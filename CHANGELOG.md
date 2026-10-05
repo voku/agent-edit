@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## 0.2.2 - 2026-10-05
+
 ### Changed
 
 - A refused plan now explains itself with the owner's own evidence: the refusal sentence is followed by the plan status and the first Map blockers, stale-evidence entries or blind spots (bounded, with a `(+N more)` count), for all six plan families. A removal blocked by a live call site now names that call site instead of only saying "not safe".
@@ -13,6 +15,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Git-free file-move receipts now observe both the removed source and the new destination by recording validated destination absence before publication.
+- A failed verification attempt now removes the previous verification result so consumers cannot read an outdated `passed` verdict.
+- Git working-tree observations preserve whitespace in repository and project directory names, including changes to already dirty files.
 - A refusal that produces no receipt (dry-run preflight refusal of a `blocked` plan, unsupported plan type/contract version, host authorization refusal) no longer leaves an empty receipt bundle directory behind. Found by replaying a real fail-closed `method-removal-plan` against `agent-recall-compiler`: hosts that count every bundle directory of a task would read the empty one as a missing verification result.
 
 ## 0.2.1 - 2026-10-04

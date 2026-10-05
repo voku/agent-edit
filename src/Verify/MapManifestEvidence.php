@@ -25,9 +25,10 @@ final readonly class MapManifestEvidence
     private const ABSENT = 'absent';
 
     /**
-     * @return array<string, string> project-relative path => `sha256:<hex>`, sorted by path
+     * @param list<string> $additionalPaths validated project-relative publication paths
+     * @return array<string, string> project-relative path => `sha256:<hex>|absent`, sorted by path
      */
-    public static function capture(AgentMapIndex $map, string $mapRoot): array
+    public static function capture(AgentMapIndex $map, string $mapRoot, array $additionalPaths = []): array
     {
         $manifest = [];
         foreach ($map->files as $file) {
@@ -35,6 +36,11 @@ final readonly class MapManifestEvidence
             if ($hash !== self::ABSENT) {
                 $manifest[$file->path] = $hash;
             }
+        }
+        // New move destinations are absent from the old Map. Observe their absence before publishing so
+        // changedSince() can report both sides of the move without trusting the runner's claimed changes.
+        foreach ($additionalPaths as $path) {
+            $manifest[$path] = self::hashOf($mapRoot, $path);
         }
         ksort($manifest, SORT_STRING);
 

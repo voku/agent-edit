@@ -150,11 +150,22 @@ final readonly class EditEngine
                     $request->repositoryRoot,
                     static function () use ($applier, $plan, $map, $request, $snapshotter, &$before, &$after, &$manifestBefore): EditResult {
                         $before = $snapshotter->capture($request->repositoryRoot);
-                        if (!$before->available) {
-                            // Without Git, record what the Map indexes so a verifier can still observe those files.
-                            $manifestBefore = MapManifestEvidence::capture($map, $request->mapRoot);
-                        }
                         try {
+                            if (!$before->available) {
+                                $prepared = $applier->preflight($plan, $map, $request->mapRoot);
+                                $root = realpath($request->mapRoot);
+                                if (!is_string($root)) {
+                                    throw new RuntimeException('Unable to resolve refactor map root for observation.');
+                                }
+                                $root = rtrim(str_replace('\\', '/', $root), '/');
+                                $publicationPaths = [];
+                                foreach ($prepared['final_paths'] as $source => $final) {
+                                    if ($source !== $final) {
+                                        $publicationPaths[] = substr(str_replace('\\', '/', $final), strlen($root) + 1);
+                                    }
+                                }
+                                $manifestBefore = MapManifestEvidence::capture($map, $request->mapRoot, $publicationPaths);
+                            }
                             $result = $applier->apply($plan, $map, $request->mapRoot);
                         } catch (Throwable $exception) {
                             $after = $snapshotter->capture($request->repositoryRoot);
@@ -261,6 +272,11 @@ final readonly class EditEngine
             throw new RuntimeException('Project root not found: ' . $repositoryRoot);
         }
         $bundlePath = $this->insideExisting($root, $bundle, 'bundle', true);
+        // A failed attempt must never leave an earlier successful verdict available to bundle consumers.
+        $verificationPath = $bundlePath . '/' . self::VERIFICATION_FILE;
+        if ((file_exists($verificationPath) || is_link($verificationPath)) && !@unlink($verificationPath)) {
+            throw new RuntimeException('Unable to invalidate previous refactor verification result.');
+        }
         $mapIndexPath = $this->insideExisting($root, $mapIndex ?? MapArtifactPaths::forProject($root)->indexJson(), 'map index', false);
         $mapRootPath = $this->insideExisting($root, $mapRoot, 'map root', true);
 
@@ -273,7 +289,7 @@ final readonly class EditEngine
 
         $verifier = $this->verifierOverrides[$capability->verifier] ?? new ($capability->verifier)();
         $result = $verifier->verify($bundlePath, $mapIndexPath, $mapRootPath);
-        $this->writeAtomically($bundlePath . '/' . self::VERIFICATION_FILE, $this->json($result));
+        $this->writeAtomically($verificationPath, $this->json($result));
 
         return $result;
     }
