@@ -30,6 +30,7 @@ final class CapabilitiesTest extends TestCase
             'method_removal_plan',
             'property_removal_plan',
             'class_constant_removal_plan',
+            'class_removal_plan',
         ], $types);
     }
 
@@ -119,13 +120,11 @@ final class CapabilitiesTest extends TestCase
         $result = (new CapabilityRegistry())->intersect($payload);
 
         self::assertSame([], $result['executable_not_planned'], 'agent-edit executes a contract the installed agent-map no longer plans.');
-        self::assertCount(11, $result['executable']);
+        self::assertCount(12, $result['executable']);
         $plannedOnly = array_map(static fn (array $row): string => $row['plan_type'], $result['planned_not_executable']);
         foreach ($plannedOnly as $type) {
             // Anything Map plans but agent-edit cannot execute must be a known non-mutation-contract gap, never silent.
-            // class_removal_plan: agent-map plans it since 0.19.0 and the demand gate in agent-edit#13 is met (3/3), but the
-            // executor is not built yet; it stays a named gap until then, never silent.
-            self::assertContains($type, ['method_copy_plan', 'class_scaffold_plan', 'method_scaffold_plan', 'class_removal_plan']);
+            self::assertContains($type, ['method_copy_plan', 'class_scaffold_plan', 'method_scaffold_plan']);
         }
     }
 

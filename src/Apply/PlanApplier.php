@@ -16,7 +16,7 @@ interface PlanApplier
 
     /**
      * @param array<string, mixed> $plan
-     * @return array{files: array<string, string>, final_paths: array<string, string>, source_hashes: array<string, string>, plan_type: string, edit_count: int, move_count: int}
+     * @return array{files: array<string, string>, final_paths: array<string, string>, source_hashes: array<string, string>, plan_type: string, edit_count: int, move_count: int, deletion_count?: int}
      */
     public function preflight(array $plan, AgentMapIndex $map, string $root): array;
 }

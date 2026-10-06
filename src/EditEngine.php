@@ -61,7 +61,7 @@ final readonly class EditEngine
      * Validates the complete plan against current source and Map evidence; nothing is written.
      *
      * @param array<string, mixed> $plan decoded plan document
-     * @return array{files: array<string, string>, final_paths: array<string, string>, source_hashes: array<string, string>, plan_type: string, edit_count: int, move_count: int}
+     * @return array{files: array<string, string>, final_paths: array<string, string>, source_hashes: array<string, string>, plan_type: string, edit_count: int, move_count: int, deletion_count?: int}
      */
     public function preflight(array $plan, AgentMapIndex $map, string $repositoryRoot): array
     {
@@ -134,10 +134,11 @@ final readonly class EditEngine
                 status: 'prepared',
                 exitCode: 0,
                 stdout: sprintf(
-                    "%s validated %d edit(s) and %d move(s); no source was changed.\n",
+                    "%s validated %d edit(s), %d move(s) and %d deletion(s); no source was changed.\n",
                     $prepared['plan_type'],
                     $prepared['edit_count'],
                     $prepared['move_count'],
+                    $prepared['deletion_count'] ?? 0,
                 ),
             );
         } else {

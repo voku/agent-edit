@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Added
+
+- `class_removal_plan@1.0` is executable: `apply` deletes the single file owned by the target class after re-proving plan provenance, the file hash, sole declaration and absence of incoming Map evidence (restored on failure), and `verify` requires the file and class to be absent from a rebuilt Map with `changed_files` exactly the deleted path. `review_required`, `blocked`, stale, edit-carrying, move-carrying or multi-deletion plans are refused before any change.
+
 ## 0.3.0 - 2026-10-06
 
 ### Added
