@@ -20,6 +20,7 @@ use voku\AgentEdit\Receipt\EditReceipt;
 use voku\AgentEdit\Receipt\ReceiptNotPersistedException;
 use voku\AgentEdit\Verify\BundleVerifier;
 use voku\AgentEdit\Verify\MapManifestEvidence;
+use voku\AgentEdit\Verify\ResidueCheck;
 use voku\AgentMap\Index\AgentMapIndex;
 use voku\AgentMap\Index\IndexReader;
 use voku\AgentMap\MapArtifactPaths;
@@ -265,7 +266,7 @@ final readonly class EditEngine
      *
      * @return array<string, mixed> the verification result document
      */
-    public function verify(string $repositoryRoot, string $bundle, ?string $mapIndex = null, string $mapRoot = '.'): array
+    public function verify(string $repositoryRoot, string $bundle, ?string $mapIndex = null, string $mapRoot = '.', ?string $acceptResidue = null): array
     {
         $root = realpath($repositoryRoot);
         if (!is_string($root)) {
@@ -289,9 +290,24 @@ final readonly class EditEngine
 
         $verifier = $this->verifierOverrides[$capability->verifier] ?? new ($capability->verifier)();
         $result = $verifier->verify($bundlePath, $mapIndexPath, $mapRootPath);
+        $result = (new ResidueCheck())->apply($result, $this->boundPlan($receipt), $mapRootPath, $acceptResidue);
         $this->writeAtomically($verificationPath, $this->json($result));
 
         return $result;
+    }
+
+    /**
+     * The immutable plan the receipt is bound to; the plan-type verifier has already proven its hash.
+     *
+     * @param array<string, mixed> $receipt
+     * @return array<string, mixed>
+     */
+    private function boundPlan(array $receipt): array
+    {
+        $path = $receipt['plan']['path'] ?? null;
+        $raw = is_string($path) ? @file_get_contents($path) : false;
+
+        return is_string($path) && is_string($raw) ? $this->decodePlan($path, $raw) : [];
     }
 
     /** @param array<string, mixed> $plan */
