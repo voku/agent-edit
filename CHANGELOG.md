@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+
+- `verify` re-scans Markdown and Twig / Smarty / Blade files for the old symbol after a `method_rename_plan`, `class_rename_plan` or `method_removal_plan` and records a `residue` block (`clear`, `open` or `accepted`, with counts and the first non-historical references) in `verification-result.json`. While non-historical mentions remain, an otherwise `passed` result is `incomplete` (CLI exit code 3); changelog-style files count as historical and never block. `--accept-residue=REASON` (`verify(..., acceptResidue:)`) records a disposition and keeps the verdict `passed`. Requires `voku/agent-map` `^0.20.0`.
+
 ### Fixed
 
 - Git command path output now accepts CRLF line endings without treating the carriage return as part of the repository or project path.

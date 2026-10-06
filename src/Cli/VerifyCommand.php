@@ -28,7 +28,7 @@ final readonly class VerifyCommand
 
         try {
             $options = $this->options($tokens);
-            $result = $this->engine->verify($this->projectRoot, $options['bundle'], $options['map_index'], $options['map_root']);
+            $result = $this->engine->verify($this->projectRoot, $options['bundle'], $options['map_index'], $options['map_root'], $options['accept_residue']);
         } catch (Throwable $exception) {
             fwrite(STDERR, '[ERROR] ' . $exception->getMessage() . "\n");
 
@@ -43,12 +43,27 @@ final readonly class VerifyCommand
         $candidate = str_starts_with($options['bundle'], '/') ? $options['bundle'] : $this->projectRoot . '/' . $options['bundle'];
         $bundle = str_replace('\\', '/', (string) realpath($candidate));
         $status = is_string($result['status'] ?? null) ? $result['status'] : 'passed';
-        echo $label . ' verification: ' . $status . ($status === 'incomplete' ? ' (scope_unproven: only Map-indexed files were observed)' : '') . "\n";
+        $residue = is_array($result['residue'] ?? null) ? $result['residue'] : [];
+        $note = '';
+        if ($status === 'incomplete') {
+            $note = ($residue['status'] ?? null) === 'open'
+                ? ' (residue_open: ' . (int) ($residue['open'] ?? 0) . ' non-historical Markdown/template mention(s) of the old symbol remain)'
+                : ' (scope_unproven: only Map-indexed files were observed)';
+        }
+        echo $label . ' verification: ' . $status . $note . "\n";
         echo '- bundle: ' . $bundle . "\n";
         if ($label === 'Refactor') {
             echo '- plan: ' . (string) ($plan['type'] ?? '') . '@' . (string) ($plan['contract_version'] ?? '') . "\n";
         }
         echo '- target: ' . (string) ($plan['target_id'] ?? '') . "\n";
+        if ($residue !== []) {
+            echo '- residue: ' . (string) ($residue['status'] ?? '') . ' (open ' . (int) ($residue['open'] ?? 0) . ', historical ' . (int) ($residue['historical'] ?? 0) . ")\n";
+            foreach (array_slice(is_array($residue['references'] ?? null) ? $residue['references'] : [], 0, 10) as $reference) {
+                if (is_array($reference)) {
+                    echo '  - ' . (string) ($reference['path'] ?? '') . ':' . (int) ($reference['line'] ?? 0) . ' [' . (string) ($reference['confidence'] ?? '') . '] ' . (string) ($reference['matched'] ?? '') . "\n";
+                }
+            }
+        }
         echo '- result: ' . $bundle . '/' . EditEngine::VERIFICATION_FILE . "\n";
 
         return $status === 'passed' ? 0 : 3;
@@ -56,7 +71,7 @@ final readonly class VerifyCommand
 
     /**
      * @param list<string> $tokens
-     * @return array{bundle: string, map_index: ?string, map_root: string}
+     * @return array{bundle: string, map_index: ?string, map_root: string, accept_residue: ?string}
      */
     private function options(array $tokens): array
     {
@@ -78,7 +93,7 @@ final readonly class VerifyCommand
                 }
                 ++$index;
             }
-            if (!in_array($name, ['bundle', 'map-index', 'map-root'], true) || $value === '' || isset($values[$name])) {
+            if (!in_array($name, ['bundle', 'map-index', 'map-root', 'accept-residue'], true) || $value === '' || isset($values[$name])) {
                 throw new RuntimeException('Invalid or duplicate refactor verify option: --' . $name);
             }
             $values[$name] = $value;
@@ -88,6 +103,7 @@ final readonly class VerifyCommand
             'bundle' => $values['bundle'] ?? '',
             'map_index' => $values['map-index'] ?? null,
             'map_root' => $values['map-root'] ?? '.',
+            'accept_residue' => $values['accept-residue'] ?? null,
         ];
     }
 
@@ -95,11 +111,15 @@ final readonly class VerifyCommand
     {
         return <<<'TXT'
 Usage:
-  agent-edit verify --bundle=PATH [--map-index PATH] [--map-root PATH]
+  agent-edit verify --bundle=PATH [--map-index PATH] [--map-root PATH] [--accept-residue=REASON]
 
 Read-only verification of one applied agent-edit receipt bundle (`execution.json`). It requires independently
 observed changed-file evidence, binds the immutable plan, checks the refreshed Map and writes
 verification-result.json into the bundle.
+
+For method rename, class rename and method removal plans it also re-scans Markdown and Twig/Smarty/Blade files for the old
+symbol. Non-historical mentions that remain make an otherwise passed result `incomplete` (exit 3) until they are fixed, or
+accepted with a recorded reason via --accept-residue=REASON.
 
 TXT;
     }

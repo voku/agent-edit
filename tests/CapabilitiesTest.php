@@ -123,7 +123,9 @@ final class CapabilitiesTest extends TestCase
         $plannedOnly = array_map(static fn (array $row): string => $row['plan_type'], $result['planned_not_executable']);
         foreach ($plannedOnly as $type) {
             // Anything Map plans but agent-edit cannot execute must be a known non-mutation-contract gap, never silent.
-            self::assertContains($type, ['method_copy_plan', 'class_scaffold_plan', 'method_scaffold_plan']);
+            // class_removal_plan: agent-map plans it since 0.19.0 and the demand gate in agent-edit#13 is met (3/3), but the
+            // executor is not built yet; it stays a named gap until then, never silent.
+            self::assertContains($type, ['method_copy_plan', 'class_scaffold_plan', 'method_scaffold_plan', 'class_removal_plan']);
         }
     }
 
