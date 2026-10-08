@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.4.2 - 2026-10-08
+
+### Changed
+
+- Accept `voku/agent-map` `^0.20.0 || ^0.21.0 || ^0.22.0`, so installs can resolve agent-map 0.22.0 (adds `MapPreparationService::rebuild()` and output materialization; no plan contract changes). The suite and PHPStan pass against agent-map 0.22.0.
+
 ## 0.4.1 - 2026-10-08
 
 ### Changed
