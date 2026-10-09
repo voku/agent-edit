@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.4.3 - 2026-10-09
+
+### Changed
+
+- The `verify` residue scan now also covers `class_removal_plan`: Markdown and template mentions of the removed class keep an otherwise `passed` verification `incomplete` until fixed or accepted with `--accept-residue`.
+
 ## 0.4.2 - 2026-10-08
 
 ### Changed

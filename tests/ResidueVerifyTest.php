@@ -101,6 +101,16 @@ final class ResidueVerifyTest extends TestCase
         self::assertSame(1, $result['residue']['historical'], 'the changelog mention is history, not residue');
     }
 
+    public function testClassRemovalReportsRemainingMentionsOfTheRemovedClass(): void
+    {
+        file_put_contents($this->root . '/README.md', "Use `Demo\\Service` for everything.\n");
+        $result = (new ResidueCheck())->apply(['status' => 'passed', 'checks' => []], ['type' => 'class_removal_plan', 'target_id' => 'class:Demo\\Service'], $this->root, null);
+
+        self::assertSame('incomplete', $result['status']);
+        self::assertSame('open', $result['residue']['status']);
+        self::assertContains('README.md', array_column($result['residue']['references'], 'path'));
+    }
+
     public function testPlanTypesWithoutADeclaredSymbolPassThroughUnchanged(): void
     {
         $result = ['status' => 'passed', 'checks' => []];
