@@ -44,11 +44,16 @@ final readonly class VerifyCommand
         $bundle = str_replace('\\', '/', (string) realpath($candidate));
         $status = is_string($result['status'] ?? null) ? $result['status'] : 'passed';
         $residue = is_array($result['residue'] ?? null) ? $result['residue'] : [];
+        $imports = is_array($result['import_residue'] ?? null) ? $result['import_residue'] : [];
         $note = '';
         if ($status === 'incomplete') {
-            $note = ($residue['status'] ?? null) === 'open'
-                ? ' (residue_open: ' . (int) ($residue['open'] ?? 0) . ' non-historical Markdown/template mention(s) of the old symbol remain)'
-                : ' (scope_unproven: only Map-indexed files were observed)';
+            if (($residue['status'] ?? null) === 'open') {
+                $note = ' (residue_open: ' . (int) ($residue['open'] ?? 0) . ' non-historical Markdown/template mention(s) of the old symbol remain)';
+            } elseif (($imports['status'] ?? null) === 'open') {
+                $note = ' (import_residue_open: ' . (int) ($imports['open'] ?? 0) . ' `use` import(s) orphaned by the deletion remain)';
+            } else {
+                $note = ' (scope_unproven: only Map-indexed files were observed)';
+            }
         }
         echo $label . ' verification: ' . $status . $note . "\n";
         echo '- bundle: ' . $bundle . "\n";
@@ -61,6 +66,14 @@ final readonly class VerifyCommand
             foreach (array_slice(is_array($residue['references'] ?? null) ? $residue['references'] : [], 0, 10) as $reference) {
                 if (is_array($reference)) {
                     echo '  - ' . (string) ($reference['path'] ?? '') . ':' . (int) ($reference['line'] ?? 0) . ' [' . (string) ($reference['confidence'] ?? '') . '] ' . (string) ($reference['matched'] ?? '') . "\n";
+                }
+            }
+        }
+        if ($imports !== []) {
+            echo '- import residue: ' . (string) ($imports['status'] ?? '') . ' (open ' . (int) ($imports['open'] ?? 0) . ")\n";
+            foreach (is_array($imports['imports'] ?? null) ? $imports['imports'] : [] as $import) {
+                if (is_array($import)) {
+                    echo '  - ' . (string) ($import['path'] ?? '') . ':' . (int) ($import['line'] ?? 0) . ' use ' . (string) ($import['import'] ?? '') . ";\n";
                 }
             }
         }

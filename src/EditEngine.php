@@ -19,6 +19,7 @@ use voku\AgentEdit\Receipt\ApplyRequest;
 use voku\AgentEdit\Receipt\EditReceipt;
 use voku\AgentEdit\Receipt\ReceiptNotPersistedException;
 use voku\AgentEdit\Verify\BundleVerifier;
+use voku\AgentEdit\Verify\ImportResidueCheck;
 use voku\AgentEdit\Verify\MapManifestEvidence;
 use voku\AgentEdit\Verify\ResidueCheck;
 use voku\AgentMap\Index\AgentMapIndex;
@@ -292,6 +293,7 @@ final readonly class EditEngine
         $verifier = $this->verifierOverrides[$capability->verifier] ?? new ($capability->verifier)();
         $result = $verifier->verify($bundlePath, $mapIndexPath, $mapRootPath);
         $result = (new ResidueCheck())->apply($result, $this->boundPlan($receipt), $mapRootPath, $acceptResidue);
+        $result = (new ImportResidueCheck())->apply($result, $this->boundPlan($receipt), $mapRootPath, $acceptResidue);
         $this->writeAtomically($verificationPath, $this->json($result));
 
         return $result;
