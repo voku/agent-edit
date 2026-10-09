@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.4.4 - 2026-10-09
+
+### Added
+
+- `verify` reports `use` imports orphaned by a `method_removal_plan`, `method_move_plan`, `property_removal_plan` or `class_constant_removal_plan` deletion: an import whose alias occurred in the deleted text and no longer occurs in the edited file is listed in an `import_residue` block (`clear`, `open` or `accepted`). While open, an otherwise `passed` result is `incomplete` (CLI exit code 3); `--accept-residue=REASON` records a disposition. `apply` still performs only the plan's exact edits.
+
 ## 0.4.3 - 2026-10-09
 
 ### Changed
