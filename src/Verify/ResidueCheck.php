@@ -17,7 +17,7 @@ use voku\AgentMap\Reference\ReferenceTarget;
  */
 final readonly class ResidueCheck
 {
-    private const SUPPORTED_PLANS = ['method_rename_plan', 'class_rename_plan', 'method_removal_plan'];
+    private const SUPPORTED_PLANS = ['method_rename_plan', 'class_rename_plan', 'method_removal_plan', 'class_removal_plan'];
     private const MAX_LISTED = 50;
 
     public function __construct(private NonPhpReferenceScanner $scanner = new NonPhpReferenceScanner())
@@ -70,6 +70,14 @@ final readonly class ResidueCheck
         $type = $plan['type'] ?? null;
         if (!is_string($type) || !in_array($type, self::SUPPORTED_PLANS, true)) {
             return [];
+        }
+
+        if ($type === 'class_removal_plan') {
+            $id = $plan['target_id'] ?? null;
+
+            return is_string($id) && preg_match('/^class:(.+)$/', $id, $match) === 1
+                ? [ReferenceTarget::classLike($match[1])]
+                : [];
         }
 
         if ($type === 'class_rename_plan') {
