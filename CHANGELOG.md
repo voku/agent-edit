@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Added
+
+- `source_edit_plan@1.0`, a caller-authored direct-edit capability that needs no `agent-map` index: exact `find`/`replace` anchors (unique, `occurrence` or `all`), optional per-edit file digests and `creates` for new files. Refusals are actionable (match line numbers, whitespace/line-ending differences, closest line). Rewritten and created PHP is syntax-checked and published through the new generic `FileTransaction` (stage, lint, back up, publish, roll back). A token-level `SignatureGuard` refuses removing, renaming or changing the signature of a class, function or non-private method unless `allow_signature_change` is set, and records the acknowledgement.
+- `agent-edit edit FILE --find ... --replace ...` (one edit; `--find-file`/`--replace-file` for multi-line text), `agent-edit apply -` (plan on stdin), `agent-edit undo --bundle=PATH` and `agent-edit schema`. Direct-edit receipts bind per-file digests and pre-images; `undo` restores them only while every touched file still has the published digest. `verify` of a direct edit needs no Map.
+- `agent-edit capabilities` reports `requires_map`; `--with-map` lists Map-free capabilities under `direct` instead of `executable_not_planned`.
+- `EditEngine::undo()`, `EditEngine::preflight()`/`apply()` accept a `null` Map for Map-free plans, `ApplyRequest::$mapIndexPath` may be `null` for them, and `EditResult` carries applier `evidence`.
+
+### Fixed
+
+- Verifying an edit of a file Git ignores no longer fails with "changed_files do not match plan scope": ignored plan files are recorded at apply time, proven by digest and reported in `git_ignored_files_proven_by_digest_only`.
+
 ## 0.4.4 - 2026-10-09
 
 ### Added

@@ -58,6 +58,32 @@ final readonly class WorkingTreeSnapshotter
     }
 
     /**
+     * Which of the root-relative paths Git ignores. `git status` never reports ignored files, so an edit to one is
+     * invisible to the before/after observation and has to be accounted for separately. Tracked files are never
+     * ignored in this sense, and a missing repository or a failing Git yields no ignored paths.
+     *
+     * @param list<string> $relativePaths
+     * @return list<string>
+     */
+    public function ignoredPaths(string $repositoryRoot, array $relativePaths): array
+    {
+        $root = realpath($repositoryRoot);
+        if ($root === false || $relativePaths === []) {
+            return [];
+        }
+        $output = $this->run($root, ['git', 'check-ignore', '-z', '--stdin'], implode("\0", $relativePaths) . "\0");
+        if ($output === null) {
+            return [];
+        }
+
+        $ignored = array_values(array_filter(explode("\0", $output), static fn (string $path): bool => $path !== ''));
+        $ignored = array_values(array_intersect($relativePaths, $ignored));
+        sort($ignored, SORT_STRING);
+
+        return $ignored;
+    }
+
+    /**
      * `-z` output is NUL-separated with no trailing newline, and a rename entry carries its origin
      * path as a second record - which must be consumed, not read as a status line of its own.
      *
@@ -103,17 +129,21 @@ final readonly class WorkingTreeSnapshotter
     }
 
     /** @param non-empty-list<string> $command */
-    private function run(string $workingDirectory, array $command): ?string
+    private function run(string $workingDirectory, array $command, ?string $stdin = null): ?string
     {
         $process = proc_open(
             $command,
-            [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
             $pipes,
             $workingDirectory,
         );
         if (!is_resource($process)) {
             return null;
         }
+        if ($stdin !== null) {
+            fwrite($pipes[0], $stdin);
+        }
+        fclose($pipes[0]);
 
         $stdout = stream_get_contents($pipes[1]);
         // Drained as well: an undrained stderr pipe can block the child once its buffer fills.

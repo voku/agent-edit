@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace voku\AgentEdit\Cli;
 
 use Closure;
+use HelgeSverre\Toon\Toon;
 use InvalidArgumentException;
 use RuntimeException;
 use Throwable;
+use voku\AgentEdit\Capability\CapabilityRegistry;
 use voku\AgentEdit\EditEngine;
 use voku\AgentEdit\Receipt\ApplyRequest;
 use voku\AgentMap\MapArtifactPaths;
@@ -18,11 +20,13 @@ final readonly class ApplyCommand
     /**
      * @param (Closure(string): void)|null $authorizeMutation host authorization hook called with the label before any
      *                                                       non-dry-run write; it must throw to refuse the write
+     * @param (Closure(): string)|null $readStdin source of the plan bytes for `agent-edit apply -` (default: STDIN)
      */
     public function __construct(
         private string $projectRoot,
         private EditEngine $engine = new EditEngine(),
         private ?Closure $authorizeMutation = null,
+        private ?Closure $readStdin = null,
     ) {
     }
 
@@ -33,8 +37,10 @@ final readonly class ApplyCommand
             return $this->help();
         }
 
+        $staged = null;
         try {
             $request = $this->parse($tokens);
+            $staged = $request['staged'];
             $receipt = $this->engine->applyWithReceipt(new ApplyRequest(
                 repositoryRoot: $this->projectRoot,
                 planPath: $request['plan'],
@@ -54,6 +60,15 @@ final readonly class ApplyCommand
 
             return $receipt->succeeded() ? 0 : 1;
         } catch (Throwable $exception) {
+            // A plan staged from stdin only exists to be bound by a receipt; without one it is just litter.
+            if ($staged !== null && !is_file(dirname($staged['plan']) . '/' . EditEngine::RECEIPT_FILE)) {
+                @unlink($staged['plan']);
+                foreach ($staged['created'] as $directory) {
+                    if (!is_dir($directory) || (new \FilesystemIterator($directory))->valid() || !@rmdir($directory)) {
+                        break;
+                    }
+                }
+            }
             fwrite(STDERR, '[ERROR] ' . $exception->getMessage() . "\n");
 
             return 1;
@@ -65,10 +80,11 @@ final readonly class ApplyCommand
      * @return array{
      *     task_id: string,
      *     plan: string,
-     *     map_index: string,
+     *     map_index: string|null,
      *     map_root: string,
      *     output_directory: string,
-     *     dry_run: bool
+     *     dry_run: bool,
+     *     staged: array{plan: string, created: list<string>}|null
      * }
      */
     private function parse(array $tokens): array
@@ -118,27 +134,54 @@ final readonly class ApplyCommand
         }
 
         if (!is_string($plan) || trim($plan) === '') {
-            throw new InvalidArgumentException('agent-edit apply requires exactly one plan JSON/TOON path.');
+            throw new InvalidArgumentException('agent-edit apply requires exactly one plan JSON/TOON path (or `-` to read the plan from stdin).');
         }
-        $planPath = $this->existingFile($root, $plan, 'refactor plan');
-        $taskId = trim($values['task'] ?? '');
-        if ($taskId === '') {
-            $planBytes = file_get_contents($planPath);
-            if (!is_string($planBytes)) {
-                throw new RuntimeException('Unable to read refactor plan: ' . $plan);
+        $staged = null;
+        if ($plan === '-') {
+            $planBytes = $this->readStdin !== null ? ($this->readStdin)() : stream_get_contents(STDIN);
+            if (!is_string($planBytes) || trim($planBytes) === '') {
+                throw new InvalidArgumentException('agent-edit apply - received an empty plan on stdin.');
             }
-            $taskId = 'plan-' . substr(hash('sha256', $planBytes), 0, 12);
-        }
-        if (preg_match('/\A[A-Za-z0-9][A-Za-z0-9._-]*\z/', $taskId) !== 1 || str_contains($taskId, '..')) {
-            throw new InvalidArgumentException('agent-edit apply requires a valid --task label.');
+            $taskId = trim($values['task'] ?? '');
+            $taskId = $taskId !== '' ? $taskId : 'plan-' . substr(hash('sha256', $planBytes), 0, 12);
+            $this->assertLabel($taskId);
+            $output = $this->resolvePath($root, $values['output-dir'] ?? '.agent-edit/receipts/' . $taskId);
+            $this->assertInsideRoot($root, $output);
+            $planPath = $output . '/plan.json';
+            // Deepest first, so cleanup after a refusal can remove exactly what staging created.
+            $created = [];
+            for ($directory = $output; !is_dir($directory); $directory = dirname($directory)) {
+                $created[] = $directory;
+            }
+            if ($created !== [] && !@mkdir($output, 0o775, true) && !is_dir($output)) {
+                throw new RuntimeException('Unable to create the receipt directory: ' . $output);
+            }
+            if (file_exists($planPath) || file_exists($output . '/' . EditEngine::RECEIPT_FILE)) {
+                throw new RuntimeException('A receipt bundle already exists at ' . $output . '; pass another --task or --output-dir so the earlier evidence is not overwritten.');
+            }
+            if (@file_put_contents($planPath, $planBytes) === false) {
+                throw new RuntimeException('Unable to stage the stdin plan: ' . $planPath);
+            }
+            $staged = ['plan' => $planPath, 'created' => $created];
+        } else {
+            $planPath = $this->existingFile($root, $plan, 'refactor plan');
+            $taskId = trim($values['task'] ?? '');
+            if ($taskId === '') {
+                $planBytes = file_get_contents($planPath);
+                if (!is_string($planBytes)) {
+                    throw new RuntimeException('Unable to read refactor plan: ' . $plan);
+                }
+                $taskId = 'plan-' . substr(hash('sha256', $planBytes), 0, 12);
+            }
+            $this->assertLabel($taskId);
+            $output = $this->resolvePath($root, $values['output-dir'] ?? '.agent-edit/receipts/' . $taskId);
+            $this->assertInsideRoot($root, $output);
         }
 
         $mapRoot = $this->existingDirectory($root, $values['map-root'] ?? $root, 'map root');
-        $mapIndex = $this->existingFile($root, $values['map-index'] ?? MapArtifactPaths::forProject($root)->indexJson(), 'map index');
-        $output = $this->resolvePath($root, $values['output-dir'] ?? '.agent-edit/receipts/' . $taskId);
-        // `verify` only accepts bundles inside the project root, so a receipt written elsewhere could never be verified.
-        if (str_contains('/' . $output . '/', '/../') || ($output !== $root && !str_starts_with($output, rtrim($root, '/') . '/'))) {
-            throw new InvalidArgumentException('--output-dir must stay inside the project root: ' . $output);
+        $mapIndex = null;
+        if (isset($values['map-index']) || $this->planNeedsMap($planPath)) {
+            $mapIndex = $this->existingFile($root, $values['map-index'] ?? MapArtifactPaths::forProject($root)->indexJson(), 'map index');
         }
 
         return [
@@ -148,7 +191,41 @@ final readonly class ApplyCommand
             'map_root' => $mapRoot,
             'output_directory' => $output,
             'dry_run' => $dryRun,
+            'staged' => $staged,
         ];
+    }
+
+    private function assertLabel(string $taskId): void
+    {
+        if (preg_match('/\A[A-Za-z0-9][A-Za-z0-9._-]*\z/', $taskId) !== 1 || str_contains($taskId, '..')) {
+            throw new InvalidArgumentException('agent-edit apply requires a valid --task label.');
+        }
+    }
+
+    private function assertInsideRoot(string $root, string $output): void
+    {
+        // `verify` only accepts bundles inside the project root, so a receipt written elsewhere could never be verified.
+        if (str_contains('/' . $output . '/', '/../') || ($output !== $root && !str_starts_with($output, rtrim($root, '/') . '/'))) {
+            throw new InvalidArgumentException('--output-dir must stay inside the project root: ' . $output);
+        }
+    }
+
+    /** Plans of a Map-free family are applied without reading an index; anything unreadable defaults to needing one. */
+    private function planNeedsMap(string $planPath): bool
+    {
+        $raw = @file_get_contents($planPath);
+        if (!is_string($raw)) {
+            return true;
+        }
+        try {
+            $decoded = str_ends_with(strtolower($planPath), '.toon') ? Toon::decode($raw) : json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+        } catch (Throwable) {
+            return true;
+        }
+        $type = is_array($decoded) && is_string($decoded['type'] ?? null) ? $decoded['type'] : null;
+        $capability = $type === null ? null : (new CapabilityRegistry())->find($type);
+
+        return $capability === null || $capability->requiresMap;
     }
 
     /** Resolves an existing in-scope file path for a required refactor input. */
@@ -195,18 +272,16 @@ final readonly class ApplyCommand
     {
         echo <<<'TXT'
 Usage:
-  agent-edit apply PLAN [options]
+  agent-edit apply PLAN|- [options]
 
-Consumes one safe versioned agent-map plan through agent-edit's deterministic mutation boundary.
-The fixed allowlist covers the six rename-plan contracts, class_move_plan@1.0,
-method_move_plan@1.0, method_removal_plan@1.0, property_removal_plan@1.0,
-and class_constant_removal_plan@1.0.
-Each owner family keeps its own wire decoder and semantic invariants; arbitrary edit plans and Rector
-execution remain rejected.
+Consumes one safe versioned plan through agent-edit's deterministic mutation boundary (`-` reads it from stdin).
+The fixed allowlist is `agent-edit capabilities`: the agent-map plan families plus the caller-authored
+source_edit_plan@1.0 (see `agent-edit schema`), which needs no Map. Each family keeps its own wire decoder and
+semantic invariants; Rector execution and any other plan type remain rejected.
 
 Options:
   --task LABEL         Receipt label. Default: plan-<plan sha256 prefix>.
-  --map-index PATH     Current agent-map JSON/TOON. Default: .agent-map/php-symbols.json
+  --map-index PATH     Current agent-map JSON/TOON. Default: .agent-map/php-symbols.json (not needed for source_edit_plan)
   --map-root PATH      Runtime source root for hash/currentness checks. Default: project root.
   --output-dir PATH    Receipt bundle. Default: .agent-edit/receipts/<label>
   --dry-run            Validate the complete plan and current source without mutation.

@@ -12,11 +12,13 @@ use voku\AgentEdit\Apply\MethodMovePlanApplier;
 use voku\AgentEdit\Apply\MethodRemovalPlanApplier;
 use voku\AgentEdit\Apply\PropertyRemovalPlanApplier;
 use voku\AgentEdit\Apply\RenamePlanApplier;
+use voku\AgentEdit\Apply\SourceEditPlanApplier;
 use voku\AgentEdit\Verify\ClassConstantRemovalVerifier;
 use voku\AgentEdit\Verify\ClassRemovalVerifier;
 use voku\AgentEdit\Verify\EditMovePlanVerifier;
 use voku\AgentEdit\Verify\MethodRemovalVerifier;
 use voku\AgentEdit\Verify\PropertyRemovalVerifier;
+use voku\AgentEdit\Verify\SourceEditVerifier;
 
 /**
  * Single owner of the executable plan allowlist. Routing, `agent-edit capabilities` and the verify dispatcher
@@ -49,6 +51,9 @@ final readonly class CapabilityRegistry
         $capabilities[] = new PlanCapability('property_removal_plan', ['1.0'], true, false, 'property-removal-plan', PropertyRemovalPlanApplier::class, PropertyRemovalVerifier::class);
         $capabilities[] = new PlanCapability('class_constant_removal_plan', ['1.0'], true, false, 'class-constant-removal-plan', ClassConstantRemovalPlanApplier::class, ClassConstantRemovalVerifier::class);
         $capabilities[] = new PlanCapability('class_removal_plan', ['1.0'], true, false, 'class-removal-plan', ClassRemovalPlanApplier::class, ClassRemovalVerifier::class);
+
+        // Caller-authored direct edits: the only evidence is the current source, so no Map is read or required.
+        $capabilities[] = new PlanCapability('source_edit_plan', ['1.0'], false, false, 'source-edit-plan', SourceEditPlanApplier::class, SourceEditVerifier::class, false);
 
         return $capabilities;
     }
@@ -95,7 +100,8 @@ final readonly class CapabilityRegistry
      *     schema_version: string,
      *     executable: list<array<string, mixed>>,
      *     planned_not_executable: list<array<string, mixed>>,
-     *     executable_not_planned: list<string>
+     *     executable_not_planned: list<string>,
+     *     direct: list<array<string, mixed>>
      * }
      */
     public function intersect(array $mapPayload): array
@@ -122,7 +128,13 @@ final readonly class CapabilityRegistry
         }
 
         $unplanned = [];
+        $direct = [];
         foreach ($this->all() as $capability) {
+            if (!$capability->requiresMap) {
+                // Caller-authored plans are never published by Map; reporting them as "not planned" would hide them.
+                $direct[] = $capability->toArray();
+                continue;
+            }
             if (!isset($planned[$capability->planType])) {
                 $unplanned[] = $capability->planType;
             }
@@ -133,6 +145,7 @@ final readonly class CapabilityRegistry
             'executable' => $executable,
             'planned_not_executable' => $notExecutable,
             'executable_not_planned' => $unplanned,
+            'direct' => $direct,
         ];
     }
 }

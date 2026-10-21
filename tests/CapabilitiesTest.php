@@ -31,6 +31,7 @@ final class CapabilitiesTest extends TestCase
             'property_removal_plan',
             'class_constant_removal_plan',
             'class_removal_plan',
+            'source_edit_plan',
         ], $types);
     }
 
@@ -148,8 +149,10 @@ final class CapabilitiesTest extends TestCase
     public function testEveryCapabilityRoutesToARealApplierAndVerifier(): void
     {
         foreach ((new CapabilityRegistry())->all() as $capability) {
-            self::assertTrue(is_subclass_of($capability->applier, \voku\AgentEdit\Apply\PlanApplier::class), $capability->planType);
-            self::assertTrue(is_subclass_of($capability->verifier, \voku\AgentEdit\Verify\BundleVerifier::class), $capability->planType);
+            $applierContract = $capability->requiresMap ? \voku\AgentEdit\Apply\PlanApplier::class : \voku\AgentEdit\Apply\MaplessPlanApplier::class;
+            $verifierContract = $capability->requiresMap ? \voku\AgentEdit\Verify\BundleVerifier::class : \voku\AgentEdit\Verify\MaplessBundleVerifier::class;
+            self::assertTrue(is_subclass_of($capability->applier, $applierContract), $capability->planType);
+            self::assertTrue(is_subclass_of($capability->verifier, $verifierContract), $capability->planType);
             // Verification dispatch routes by runner name, so every capability sharing a runner must share its verifier.
             $routed = (new CapabilityRegistry())->findByRunner($capability->runner);
             self::assertNotNull($routed, $capability->planType);
@@ -166,5 +169,34 @@ final class CapabilitiesTest extends TestCase
 
         self::assertSame([], $result['executable']);
         self::assertContains('class_move_plan', $result['executable_not_planned']);
+    }
+
+    public function testDirectEditIsReportedAsDirectNeverAsUnplannedAndNeedsNoMap(): void
+    {
+        $result = (new CapabilityRegistry())->intersect([
+            'type' => 'plan_capabilities',
+            'capabilities' => [['plan_type' => 'method_move_plan', 'contract_version' => '1.0']],
+        ]);
+
+        self::assertNotContains('source_edit_plan', $result['executable_not_planned']);
+        self::assertSame(['source_edit_plan'], array_map(static fn (array $row): string => $row['plan_type'], $result['direct']));
+        self::assertFalse($result['direct'][0]['requires_map']);
+        self::assertTrue($result['direct'][0]['transactional']);
+
+        $own = (new CapabilityRegistry())->find('method_move_plan');
+        self::assertNotNull($own);
+        self::assertTrue($own->toArray()['requires_map']);
+    }
+
+    public function testSourceEditPlanIsNotExecutableEvenIfAMapEverPublishedTheSameName(): void
+    {
+        // A planner publishing the type does not turn it into a Map-backed contract: it stays direct.
+        $result = (new CapabilityRegistry())->intersect([
+            'type' => 'plan_capabilities',
+            'capabilities' => [['plan_type' => 'source_edit_plan', 'contract_version' => '1.0']],
+        ]);
+
+        self::assertCount(1, $result['executable']);
+        self::assertSame(['source_edit_plan'], array_map(static fn (array $row): string => $row['plan_type'], $result['direct']));
     }
 }
