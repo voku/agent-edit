@@ -34,13 +34,21 @@ vendor/bin/agent-edit verify --bundle=.agent-edit/receipts/<label>
 ```bash
 vendor/bin/agent-edit capabilities --format=json
 vendor/bin/agent-map plan-capabilities --format=json | vendor/bin/agent-edit capabilities --with-map=-
+vendor/bin/agent-edit instructions --format=json
+vendor/bin/agent-map plan-capabilities --format=json | vendor/bin/agent-edit instructions --with-map=-
 ```
 
-The second command intersects what Map can *plan* with what agent-edit can *execute*: `executable`, `planned_not_executable` (for example `method_copy_plan`) and `executable_not_planned`. A host should expose only the intersection to a coding agent.
+The second command intersects what Map can *plan* with what agent-edit can *execute*: `executable`, `planned_not_executable` (for example `class_scaffold_plan`) and `executable_not_planned`. A host should expose only the intersection to a coding agent.
+
+`instructions` emits prompt-ready JSON with a short operating procedure and the plan commands from the same executable capability registry. Without `--with-map`, it labels the registry as an upper bound; piping current Map capabilities through `--with-map=-` resolves the exact installed intersection. Hosts can include this output in a coding agent's context instead of maintaining a second, drifting list of executable refactors.
+
+The guidance keeps the boundary explicit: Map proposes a versioned plan, agent-edit validates and applies only that plan, and the host handles arbitrary behavioral edits and their semantic review. It does not add model calls or make agent-edit a free-form editor.
 
 `class_removal_plan` deletes exactly one whole file: the plan must be `safe` (no blockers, blind spots or stale evidence), publish no edits or moves, and name the single owned source file with its hash. Apply re-proves the hash, the target's sole declaration and the absence of incoming Map evidence before the file is moved aside, hash-checked and discarded; verify requires the file and class to be gone from a rebuilt Map.
 
-Executable contracts (all `@1.0`): `method|function|class|property|class_constant|parameter_rename_plan`, `class_move_plan`, `method_move_plan`, `method_removal_plan`, `property_removal_plan`, `class_constant_removal_plan`, `class_removal_plan`.
+Executable contracts (all `@1.0`): `method|function|class|property|class_constant|parameter_rename_plan`, `class_move_plan`, `method_move_plan`, `method_copy_plan`, `method_scaffold_plan`, `method_removal_plan`, `property_removal_plan`, `class_constant_removal_plan`, `class_removal_plan`.
+
+`method_copy_plan` and `method_scaffold_plan` are executable only when Map publishes a `safe` plan with empty blind-spot, stale and blocker evidence. A copy that refers to `$this`, `self` or `static` across class ownership is `review_required`, so agent-edit refuses it rather than copying behavior it cannot prove. Both contracts preserve Map's exact insertions and need a PHPStan-backed Map; they do not permit a host to invent a method body or patch the plan by hand.
 
 ## Package API
 

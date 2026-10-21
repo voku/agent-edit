@@ -10,7 +10,7 @@ use JsonException;
 use voku\AgentEdit\Capability\CapabilityRegistry;
 
 
-/** Thin CLI over the package API: `apply`, `verify` and `capabilities`. */
+/** Thin CLI over the package API: `apply`, `verify`, `capabilities` and `instructions`. */
 final readonly class CliApplication
 {
     public function __construct(
@@ -30,6 +30,7 @@ final readonly class CliApplication
             'apply' => (new ApplyCommand($this->projectRoot))->run($rest),
             'verify' => (new VerifyCommand($this->projectRoot))->run($rest),
             'capabilities' => $this->capabilitiesCommand($rest),
+            'instructions' => (new InstructionsCommand($this->capabilities))->run($rest),
             'help', '--help', '-h' => $this->help(),
             default => $this->unknown($command),
         };
@@ -110,8 +111,10 @@ Usage:
   agent-edit apply PLAN [--dry-run] [--map-index PATH] [--map-root PATH] [--output-dir PATH] [--task LABEL]
   agent-edit verify --bundle=PATH [--map-index PATH] [--map-root PATH]
   agent-edit capabilities [--format=json|toon] [--with-map=FILE|-]
+  agent-edit instructions [--format=json|toon] [--with-map=FILE|-]
 
 `--with-map` takes `agent-map plan-capabilities --format=json` and reports which plans are really executable.
+`instructions` emits reusable coding-agent guidance and the corresponding capability data.
 
 Plans come from `agent-map` (for example `agent-map method-move-plan`). agent-edit never invents edits,
 never calls a model, and never decides whether a task may mutate: that authority stays with the caller.

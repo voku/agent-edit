@@ -9,6 +9,7 @@ use voku\AgentEdit\Plan\RenamePlanDocument;
 use voku\AgentEdit\Plan\EditMovePlanEvidence;
 use voku\AgentEdit\Plan\ClassMovePlanDocument;
 use voku\AgentEdit\Plan\MethodMovePlanDocument;
+use voku\AgentEdit\Plan\MethodInsertionPlanDocument;
 use HelgeSverre\Toon\Toon;
 use JsonException;
 use RuntimeException;
@@ -62,6 +63,8 @@ final readonly class EditMovePlanVerifier implements BundleVerifier
         $expectedRunner = match ($document->planType()) {
             'class_move_plan' => 'class-move-plan',
             'method_move_plan' => 'method-move-plan',
+            'method_copy_plan' => 'method-copy-plan',
+            'method_scaffold_plan' => 'method-scaffold-plan',
             default => 'rename-plan',
         };
         if (($execution['runner']['name'] ?? null) !== $expectedRunner) {
@@ -217,6 +220,8 @@ final readonly class EditMovePlanVerifier implements BundleVerifier
             'kind' => match ($document->planType()) {
                 'class_move_plan' => 'class_move_plan_verification',
                 'method_move_plan' => 'method_move_plan_verification',
+                'method_copy_plan' => 'method_copy_plan_verification',
+                'method_scaffold_plan' => 'method_scaffold_plan_verification',
                 default => 'rename_plan_verification',
             },
             'status' => $viaManifest ? 'incomplete' : 'passed',
@@ -248,6 +253,7 @@ final readonly class EditMovePlanVerifier implements BundleVerifier
         return match ($plan['type'] ?? null) {
             'class_move_plan' => ClassMovePlanDocument::fromArray($plan),
             'method_move_plan' => MethodMovePlanDocument::fromArray($plan),
+            'method_copy_plan', 'method_scaffold_plan' => MethodInsertionPlanDocument::fromArray($plan),
             default => RenamePlanDocument::fromArray($plan),
         };
     }
