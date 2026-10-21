@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace voku\AgentEdit\Verify;
 
+use voku\AgentEdit\Failure\EditFailure;
+use voku\AgentEdit\Failure\FailureCode;
 use voku\AgentEdit\Plan\RenamePlanEditEvidence;
 use voku\AgentEdit\Plan\RenamePlanDocument;
 use voku\AgentEdit\Plan\EditMovePlanEvidence;
@@ -79,7 +81,7 @@ final readonly class EditMovePlanVerifier implements BundleVerifier
 
         $map = $this->withRuntimeRoot($this->reader->read($mapIndex), $mapRoot);
         if ($map->staleEntries() !== []) {
-            throw new RuntimeException('Current agent-map evidence is stale after refactor execution.');
+            throw new EditFailure('Current agent-map evidence is stale after refactor execution.', FailureCode::EvidenceStale);
         }
         if ($document->requiresPhpStan() && !str_ends_with($map->backend, '+phpstan')) {
             throw new RuntimeException('Current refactor verification requires a PHPStan-backed map for this plan contract.');

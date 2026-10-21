@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace voku\AgentEdit\Apply;
 
+use voku\AgentEdit\Failure\EditFailure;
+use voku\AgentEdit\Failure\FailureCode;
 use voku\AgentEdit\Plan\EditMovePlanEvidence;
 use Closure;
 use RuntimeException;
@@ -86,7 +88,7 @@ final readonly class EditMovePlanApplier
     {
         $map = $this->withRuntimeRoot($map, $root);
         if ($map->staleEntries() !== []) {
-            throw new RuntimeException('Current agent-map source evidence is stale; rebuild the map before applying the refactor plan.');
+            throw new EditFailure('Current agent-map source evidence is stale; rebuild the map before applying the refactor plan.', FailureCode::EvidenceStale);
         }
         $plan->assertMatches($map);
 
@@ -104,7 +106,7 @@ final readonly class EditMovePlanApplier
                 !hash_equals($edit->sourceSha256, 'sha256:' . hash('sha256', $content))
                 || substr($content, $edit->startFilePos, $edit->endFilePos - $edit->startFilePos + 1) !== $edit->expected
             ) {
-                throw new RuntimeException('Refactor edit evidence changed before apply; rebuild and re-plan.');
+                throw new EditFailure('Refactor edit evidence changed before apply; rebuild and re-plan.', FailureCode::EvidenceChanged);
             }
             $this->rememberSourceHash($sourceHashes, $path, $edit->sourceSha256);
             $byFile[$path][] = [$edit->startFilePos, $edit->endFilePos, $edit->replacement];
@@ -135,7 +137,7 @@ final readonly class EditMovePlanApplier
             $to = $this->destinationPath($root, $move->toPath);
             $content = $original[$from] ??= $this->read($from);
             if (!hash_equals($move->sourceSha256, 'sha256:' . hash('sha256', $content))) {
-                throw new RuntimeException('Refactor move source changed before apply; rebuild and re-plan.');
+                throw new EditFailure('Refactor move source changed before apply; rebuild and re-plan.', FailureCode::EvidenceChanged);
             }
             $this->rememberSourceHash($sourceHashes, $from, $move->sourceSha256);
             if ($from === $to || isset($finalPaths[$from]) || isset($moveTargets[$to])) {

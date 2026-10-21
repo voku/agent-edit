@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace voku\AgentEdit\Apply;
 
+use voku\AgentEdit\Failure\EditFailure;
+use voku\AgentEdit\Failure\FailureCode;
 use Closure;
 use RuntimeException;
 use Throwable;
@@ -76,7 +78,7 @@ final readonly class ClassRemovalPlanApplier implements PlanApplier
         $document = ClassRemovalPlanDocument::fromArray($plan);
         $map = $this->withRuntimeRoot($map, $root);
         if ($map->staleEntries() !== []) {
-            throw new RuntimeException('Current agent-map source evidence is stale; rebuild the map before applying the class removal plan.');
+            throw new EditFailure('Current agent-map source evidence is stale; rebuild the map before applying the class removal plan.', FailureCode::EvidenceStale);
         }
         $document->provenance->assertMatches($map, true);
 
@@ -88,7 +90,7 @@ final readonly class ClassRemovalPlanApplier implements PlanApplier
             throw new RuntimeException('Class removal source must declare only the target class in the current Map; rebuild and re-plan.');
         }
         if (!hash_equals($document->sourceSha256, $file->sha256)) {
-            throw new RuntimeException('Class removal evidence changed before apply; rebuild and re-plan.');
+            throw new EditFailure('Class removal evidence changed before apply; rebuild and re-plan.', FailureCode::EvidenceChanged);
         }
         foreach ($map->relations as $relation) {
             if (!in_array($document->targetId, $relation->targetIds, true)) {
@@ -108,7 +110,7 @@ final readonly class ClassRemovalPlanApplier implements PlanApplier
         $path = $this->sourcePath($root, $document->path);
         $hash = hash_file('sha256', $path);
         if (!is_string($hash) || !hash_equals($document->sourceSha256, 'sha256:' . $hash)) {
-            throw new RuntimeException('Class removal evidence changed before apply; rebuild and re-plan.');
+            throw new EditFailure('Class removal evidence changed before apply; rebuild and re-plan.', FailureCode::EvidenceChanged);
         }
 
         return [
