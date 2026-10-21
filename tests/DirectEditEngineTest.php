@@ -61,6 +61,30 @@ final class DirectEditEngineTest extends TestCase
         self::assertSame(self::SOURCE, $this->read('.agent-edit/receipts/fix/before/src/Calc.php'));
     }
 
+    public function testDirectPlanUsesTheRepositoryRootForApplyVerifyAndUndo(): void
+    {
+        $this->initGit();
+        mkdir($this->root . '/sub');
+        $planPath = $this->writeLoosePlan($this->fixPlan(), 'rooted');
+        $engine = new EditEngine();
+        $bundle = '.agent-edit/receipts/rooted';
+
+        $receipt = $engine->applyWithReceipt(new ApplyRequest(
+            repositoryRoot: $this->root,
+            planPath: $planPath,
+            mapIndexPath: null,
+            mapRoot: $this->root . '/sub',
+            outputDirectory: $this->root . '/' . $bundle,
+            label: 'rooted',
+        ));
+
+        self::assertSame('runner_succeeded', $receipt->status);
+        self::assertStringContainsString('return $a + $b;', $this->read('src/Calc.php'));
+        self::assertSame('passed', $engine->verify($this->root, $bundle, mapRoot: $this->root . '/sub')['status']);
+        self::assertSame('undone', $engine->undo($this->root, $bundle)['status']);
+        self::assertSame(self::SOURCE, $this->read('src/Calc.php'));
+    }
+
     public function testVerifyPassesWithoutAMapAndWritesTheResult(): void
     {
         $this->initGit();
@@ -427,6 +451,32 @@ final class DirectEditEngineTest extends TestCase
         self::assertStringContainsString('return $a + $b;', $this->read('src/Calc.php'), 'No file may be restored when any precondition fails.');
         self::assertSame("edited later\n", $this->read('extra.txt'));
         self::assertFileDoesNotExist($this->root . '/.agent-edit/receipts/multi/undo-result.json');
+    }
+
+    public function testUndoChecksCurrentFileDigestsBeforeHostAuthorization(): void
+    {
+        $this->initGit();
+        $this->apply($this->fixPlan(), 'stale-undo');
+        file_put_contents($this->root . '/src/Calc.php', $this->read('src/Calc.php') . "\n// later change\n");
+        $before = $this->read('src/Calc.php');
+        $authorizationCalled = false;
+
+        try {
+            (new EditEngine())->undo(
+                $this->root,
+                '.agent-edit/receipts/stale-undo',
+                static function () use (&$authorizationCalled): void {
+                    $authorizationCalled = true;
+                },
+            );
+            self::fail('Undo must refuse the changed file before asking the host to authorize it.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('File changed since it was read', $exception->getMessage());
+        }
+
+        self::assertFalse($authorizationCalled);
+        self::assertSame($before, $this->read('src/Calc.php'));
+        self::assertFileDoesNotExist($this->root . '/.agent-edit/receipts/stale-undo/undo-result.json');
     }
 
     public function testUndoCannotRunTwiceAndMakesVerifyRefuse(): void

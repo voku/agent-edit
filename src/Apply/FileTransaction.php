@@ -32,6 +32,21 @@ final readonly class FileTransaction
         $this->lintOperation = $lintOperation;
     }
 
+    /** @param list<FileOperation> $operations Proves file preconditions without staging or writing anything. */
+    public function preflight(array $operations, string $root): void
+    {
+        $realRoot = realpath($root);
+        if (!is_string($realRoot)) {
+            throw new RuntimeException('Unable to resolve the transaction root.');
+        }
+        $realRoot = rtrim(str_replace('\\', '/', $realRoot), '/');
+        if ($operations === []) {
+            throw new RuntimeException('A file transaction needs at least one operation.');
+        }
+
+        $this->assertPreconditions($operations, $realRoot);
+    }
+
     /**
      * @param list<FileOperation> $operations
      * @return list<string> non-fatal cleanup warnings after a successful publication

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace voku\AgentEdit;
 
+use Closure;
 use HelgeSverre\Toon\Toon;
 use InvalidArgumentException;
 use JsonException;
@@ -306,7 +307,7 @@ final readonly class EditEngine
 
         if ($request->dryRun) {
             $before = $snapshotter->capture($request->repositoryRoot);
-            $prepared = $applier->preflight($plan, $request->mapRoot);
+            $prepared = $applier->preflight($plan, $request->repositoryRoot);
             $result = new EditResult(
                 status: 'prepared',
                 exitCode: 0,
@@ -321,7 +322,7 @@ final readonly class EditEngine
         } else {
             // Pure and write-free: an edit that cannot be proven (ambiguous anchor, stale text, API change) is refused
             // here, before authorization, and leaves no receipt behind.
-            $applier->preflight($plan, $request->mapRoot);
+            $applier->preflight($plan, $request->repositoryRoot);
             if ($request->authorizeMutation !== null) {
                 ($request->authorizeMutation)($request->label);
             }
@@ -331,7 +332,7 @@ final readonly class EditEngine
                     static function () use ($applier, $plan, $request, $snapshotter, &$before, &$after): EditResult {
                         $before = $snapshotter->capture($request->repositoryRoot);
                         try {
-                            $result = $applier->apply($plan, $request->mapRoot);
+                            $result = $applier->apply($plan, $request->repositoryRoot);
                         } catch (Throwable $exception) {
                             $after = $snapshotter->capture($request->repositoryRoot);
                             throw $exception;
@@ -436,9 +437,10 @@ final readonly class EditEngine
      * edit created. Fails closed: every touched file must still have exactly the digest the edit published, so edits made
      * afterwards (by anyone) are never overwritten.
      *
+     * @param (Closure(string): void)|null $authorizeMutation host authorization hook called immediately before restore
      * @return array<string, mixed> the undo result document (also persisted as `undo-result.json`)
      */
-    public function undo(string $repositoryRoot, string $bundle): array
+    public function undo(string $repositoryRoot, string $bundle, ?Closure $authorizeMutation = null): array
     {
         $root = realpath($repositoryRoot);
         if (!is_string($root)) {
@@ -489,6 +491,10 @@ final readonly class EditEngine
         }
 
         $transaction = new FileTransaction();
+        $transaction->preflight($operations, $root);
+        if ($authorizeMutation !== null) {
+            $authorizeMutation((string) ($receipt['task_id'] ?? ''));
+        }
         $this->mutationLock->synchronized($root, static function () use ($transaction, $operations, $root): EditResult {
             $transaction->run($operations, $root);
 
@@ -557,7 +563,7 @@ final readonly class EditEngine
 
         $verifier = $this->verifierOverrides[$capability->verifier] ?? new ($capability->verifier)();
         if ($verifier instanceof MaplessBundleVerifier) {
-            $result = $verifier->verify($bundlePath, $this->insideExisting($root, $mapRoot, 'map root', true));
+            $result = $verifier->verify($bundlePath, $root);
             $this->writeAtomically($verificationPath, $this->json($result));
 
             return $result;

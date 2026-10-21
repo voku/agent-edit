@@ -7,6 +7,9 @@ namespace voku\AgentEdit\Tests;
 use PHPUnit\Framework\TestCase;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
+use RuntimeException;
+use voku\AgentEdit\Cli\ApplyCommand;
+use voku\AgentEdit\Cli\CliApplication;
 
 final class DirectEditCliTest extends TestCase
 {
@@ -286,6 +289,49 @@ final class DirectEditCliTest extends TestCase
         self::assertSame(1, $result['exit']);
         self::assertStringContainsString('does not occur', $result['stderr']);
         self::assertDirectoryDoesNotExist($this->root . '/.agent-edit');
+    }
+
+    public function testApplyFromStdinKeepsThePlanWhenPublicationSucceedsButReceiptWriteFails(): void
+    {
+        $bundle = $this->root . '/.agent-edit/receipts/receipt-failed';
+        mkdir($bundle . '/execution.json.tmp-' . getmypid(), 0o775, true);
+        $plan = json_encode([
+            'type' => 'source_edit_plan',
+            'contract_version' => '1.0',
+            'target_id' => 'receipt-failure',
+            'edits' => [['path' => 'README.md', 'find' => '# Demo', 'replace' => '# Recovered']],
+        ], JSON_THROW_ON_ERROR);
+
+        ob_start();
+        $exit = (new ApplyCommand($this->root, readStdin: static fn (): string => $plan))
+            ->run(['-', '--task=receipt-failed', '--output-dir=.agent-edit/receipts/receipt-failed']);
+        ob_end_clean();
+
+        self::assertSame(1, $exit);
+        self::assertFileExists($bundle . '/plan.json', 'The staged plan is recovery evidence after source publication.');
+        self::assertFileDoesNotExist($bundle . '/execution.json');
+        self::assertStringStartsWith('# Recovered', $this->read('README.md'));
+    }
+
+    public function testUndoMutationUsesTheHostAuthorizationHook(): void
+    {
+        $this->initGit();
+        $edit = $this->cli(['edit', 'src/Calc.php', '--find=return $a - $b;', '--replace=return $a + $b;', '--task=undo-auth']);
+        self::assertSame(0, $edit['exit'], $edit['stderr']);
+        $edited = $this->read('src/Calc.php');
+        $authorizedTask = null;
+        $application = new CliApplication(
+            $this->root,
+            authorizeMutation: static function (string $taskId) use (&$authorizedTask): void {
+                $authorizedTask = $taskId;
+                throw new RuntimeException('undo refused by host');
+            },
+        );
+
+        self::assertSame(1, $application->run(['agent-edit', 'undo', '--bundle=.agent-edit/receipts/undo-auth']));
+        self::assertSame('undo-auth', $authorizedTask);
+        self::assertSame($edited, $this->read('src/Calc.php'));
+        self::assertFileDoesNotExist($this->root . '/.agent-edit/receipts/undo-auth/undo-result.json');
     }
 
     public function testApplyFromEmptyStdinIsRefused(): void

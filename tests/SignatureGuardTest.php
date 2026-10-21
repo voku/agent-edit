@@ -310,4 +310,12 @@ PHP;
         self::assertCount(1, $guard->changes($before, "<?php\nnamespace D;\nfinal class A extends B\n{\n}\n"));
         self::assertSame([], $guard->changes($before, "<?php\nnamespace D;\n\nfinal   class A\n    extends B\n    implements C\n{\n    public \$added = 1;\n}\n"));
     }
+
+    public function testRemovingAUseFunctionImportDoesNotLookLikeAnApiRemoval(): void
+    {
+        $before = "<?php\nnamespace Demo;\nuse function strlen;\n";
+        $after = "<?php\nnamespace Demo;\n";
+
+        self::assertSame([], (new SignatureGuard())->changes($before, $after));
+    }
 }

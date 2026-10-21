@@ -13,6 +13,7 @@ use voku\AgentEdit\Capability\CapabilityRegistry;
 use voku\AgentEdit\Plan\SourceEditPlanDocument;
 use voku\AgentEdit\EditEngine;
 use voku\AgentEdit\Receipt\ApplyRequest;
+use voku\AgentEdit\Receipt\ReceiptNotPersistedException;
 use voku\AgentMap\MapArtifactPaths;
 
 /** CLI boundary for consuming one already-produced, versioned agent-map refactor plan. */
@@ -66,7 +67,10 @@ final readonly class ApplyCommand
             return $receipt->succeeded() ? 0 : 1;
         } catch (Throwable $exception) {
             // A plan staged from stdin only exists to be bound by a receipt; without one it is just litter.
-            if ($staged !== null && !is_file(dirname($staged['plan']) . '/' . EditEngine::RECEIPT_FILE)) {
+            if ($staged !== null
+                && !($exception instanceof ReceiptNotPersistedException)
+                && !is_file(dirname($staged['plan']) . '/' . EditEngine::RECEIPT_FILE)
+            ) {
                 @unlink($staged['plan']);
                 foreach ($staged['created'] as $directory) {
                     if (!is_dir($directory) || (new \FilesystemIterator($directory))->valid() || !@rmdir($directory)) {

@@ -244,7 +244,8 @@ final class CapabilitiesTest extends TestCase
             'capabilities' => [['plan_type' => 'source_edit_plan', 'contract_version' => '1.0']],
         ]);
 
-        self::assertCount(1, $result['executable']);
+        self::assertSame([], $result['executable']);
+        self::assertSame([], $result['planned_not_executable']);
         self::assertSame(['source_edit_plan'], array_map(static fn (array $row): string => $row['plan_type'], $result['direct']));
     }
 
@@ -289,5 +290,32 @@ final class CapabilitiesTest extends TestCase
         self::assertSame(0, $exit);
         self::assertSame(['source_edit_plan'], array_column($decoded['plans'], 'plan_type'));
         self::assertSame('map_intersection', $decoded['capability_resolution']);
+    }
+
+    public function testMapPayloadCannotDuplicateTheDirectPlanInInstructions(): void
+    {
+        $path = tempnam(sys_get_temp_dir(), 'agent-edit-map-capabilities-');
+        self::assertNotFalse($path);
+        file_put_contents($path, json_encode([
+            'type' => 'plan_capabilities',
+            'capabilities' => [[
+                'plan_type' => 'source_edit_plan',
+                'contract_version' => '1.0',
+                'command' => 'source-edit-plan',
+                'semantic_backend' => 'none',
+            ]],
+        ], JSON_THROW_ON_ERROR));
+        try {
+            ob_start();
+            $exit = (new CliApplication(sys_get_temp_dir()))->run(['agent-edit', 'instructions', '--with-map=' . $path]);
+            $decoded = json_decode((string) ob_get_clean(), true, 512, JSON_THROW_ON_ERROR);
+        } finally {
+            unlink($path);
+        }
+
+        self::assertSame(0, $exit);
+        self::assertSame(['source_edit_plan'], array_column($decoded['plans'], 'plan_type'));
+        self::assertSame([], $decoded['capability_data']['executable']);
+        self::assertSame(['source_edit_plan'], array_column($decoded['capability_data']['direct'], 'plan_type'));
     }
 }

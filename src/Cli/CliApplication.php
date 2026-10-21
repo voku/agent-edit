@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace voku\AgentEdit\Cli;
 
+use Closure;
 use HelgeSverre\Toon\Toon;
 use InvalidArgumentException;
 use JsonException;
@@ -17,6 +18,7 @@ final readonly class CliApplication
     public function __construct(
         private string $projectRoot,
         private CapabilityRegistry $capabilities = new CapabilityRegistry(),
+        private ?Closure $authorizeMutation = null,
     ) {
     }
 
@@ -28,9 +30,9 @@ final readonly class CliApplication
         $rest = array_slice($tokens, 1);
 
         return match ($command) {
-            'apply' => (new ApplyCommand($this->projectRoot))->run($rest),
-            'edit' => (new EditCommand($this->projectRoot))->run($rest),
-            'undo' => (new UndoCommand($this->projectRoot))->run($rest),
+            'apply' => (new ApplyCommand($this->projectRoot, authorizeMutation: $this->authorizeMutation))->run($rest),
+            'edit' => (new EditCommand($this->projectRoot, authorizeMutation: $this->authorizeMutation))->run($rest),
+            'undo' => (new UndoCommand($this->projectRoot, authorizeMutation: $this->authorizeMutation))->run($rest),
             'schema' => $this->schemaCommand($rest),
             'verify' => (new VerifyCommand($this->projectRoot))->run($rest),
             'capabilities' => $this->capabilitiesCommand($rest),

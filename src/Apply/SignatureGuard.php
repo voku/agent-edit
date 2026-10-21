@@ -105,6 +105,10 @@ final class SignatureGuard
             if ($id !== T_FUNCTION) {
                 continue;
             }
+            // `use function foo;` imports a function; it does not declare one.
+            if ($this->previousSignificant($tokens, $index) === T_USE) {
+                continue;
+            }
 
             $name = $this->functionName($tokens, $index);
             if ($name === null) {

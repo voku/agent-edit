@@ -122,6 +122,10 @@ final readonly class CapabilityRegistry
                 throw new InvalidArgumentException('Map plan capability entry is malformed.');
             }
             $own = $this->find($entry['plan_type']);
+            if ($own !== null && !$own->requiresMap) {
+                // Caller-authored plans are listed in `direct`; Map cannot make them executable.
+                continue;
+            }
             if ($own !== null && in_array($entry['contract_version'], $own->contractVersions, true)) {
                 $planned[$entry['plan_type']] = true;
                 $executable[] = ['map' => $entry, 'edit' => $own->toArray()];

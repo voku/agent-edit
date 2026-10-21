@@ -6,7 +6,7 @@
 
 ## Dependency direction
 
-`agent-map` is below `agent-edit`; `agent-edit` is below `agent-loop`. Never depend on `agent-loop`, `agent-recall-compiler` or any LLM client. Host authorization is injected (`ApplyRequest::$authorizeMutation`), never imported.
+`agent-map` is below `agent-edit`; `agent-edit` is below `agent-loop`. Never depend on `agent-loop`, `agent-recall-compiler` or any LLM client. Host authorization is injected (`ApplyRequest::$authorizeMutation` and `EditEngine::undo()`), never imported.
 
 ## Invariants
 

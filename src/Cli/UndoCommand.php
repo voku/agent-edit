@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace voku\AgentEdit\Cli;
 
+use Closure;
 use RuntimeException;
 use Throwable;
 use voku\AgentEdit\EditEngine;
@@ -14,6 +15,7 @@ final readonly class UndoCommand
     public function __construct(
         private string $projectRoot,
         private EditEngine $engine = new EditEngine(),
+        private ?Closure $authorizeMutation = null,
     ) {
     }
 
@@ -38,7 +40,7 @@ final readonly class UndoCommand
             if ($bundle === '') {
                 throw new RuntimeException('agent-edit undo requires --bundle=PATH.');
             }
-            $result = $this->engine->undo($this->projectRoot, $bundle);
+            $result = $this->engine->undo($this->projectRoot, $bundle, $this->authorizeMutation);
         } catch (Throwable $exception) {
             fwrite(STDERR, '[ERROR] ' . $exception->getMessage() . "\n");
 

@@ -100,6 +100,7 @@ $receipt = $engine->applyWithReceipt(new ApplyRequest(
 ));
 
 $result = $engine->verify($root, $bundleDir, $mapFile); // after rebuilding the Map; writes verification-result.json
+$undo = $engine->undo($root, $bundleDir, $hostAuthorize); // optional host hook guards the restore too
 ```
 
 Plan type and contract version are routed only through `CapabilityRegistry`. Anything it does not list (an unknown type, or a known type with an unknown `contract_version`) is rejected before any source is read.
