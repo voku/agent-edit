@@ -124,7 +124,7 @@ final readonly class InstructionsCommand
         return [
             'plan_type' => $capability->planType,
             'contract_versions' => $capability->contractVersions,
-            'agent_map_command' => 'agent-map ' . str_replace('_', '-', $capability->planType),
+            'agent_map_command' => 'agent-map ' . $capability->agentMapCommand(),
             'resolution' => $resolved ? 'executable_for_installed_map' : 'must_match_installed_map',
             'requires_phpstan' => $capability->requiresPhpStan,
             'moves_files' => $capability->movesFiles,

@@ -42,4 +42,12 @@ final readonly class PlanCapability
             'runner' => $this->runner,
         ];
     }
+
+    /** Returns the agent-map planning command that produces this plan family. */
+    public function agentMapCommand(): string
+    {
+        $command = str_replace('_', '-', $this->planType);
+
+        return $command === 'method-rename-plan' ? 'rename-plan' : $command;
+    }
 }

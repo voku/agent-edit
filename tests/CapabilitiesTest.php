@@ -81,7 +81,8 @@ final class CapabilitiesTest extends TestCase
         self::assertSame('agent_edit_coding_agent_instructions', $decoded['type']);
         self::assertSame('registry_only', $decoded['capability_resolution']);
         self::assertCount(12, $decoded['plans']);
-        self::assertSame('agent-map method-rename-plan', $decoded['plans'][0]['agent_map_command']);
+        self::assertSame('agent-map rename-plan', $decoded['plans'][0]['agent_map_command']);
+        self::assertSame('agent-map function-rename-plan', $decoded['plans'][1]['agent_map_command']);
         self::assertSame('must_match_installed_map', $decoded['plans'][0]['resolution']);
         self::assertStringContainsString('normal coding and review workflow', implode(' ', $decoded['instructions']));
     }
