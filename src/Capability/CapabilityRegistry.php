@@ -9,6 +9,7 @@ use voku\AgentEdit\Apply\ClassConstantRemovalPlanApplier;
 use voku\AgentEdit\Apply\ClassMovePlanApplier;
 use voku\AgentEdit\Apply\ClassRemovalPlanApplier;
 use voku\AgentEdit\Apply\MethodMovePlanApplier;
+use voku\AgentEdit\Apply\MethodInsertionPlanApplier;
 use voku\AgentEdit\Apply\MethodRemovalPlanApplier;
 use voku\AgentEdit\Apply\PropertyRemovalPlanApplier;
 use voku\AgentEdit\Apply\RenamePlanApplier;
@@ -47,6 +48,8 @@ final readonly class CapabilityRegistry
         // class_move_plan@1.0 requires PHPStan only when its own provenance names a +phpstan backend.
         $capabilities[] = new PlanCapability('class_move_plan', ['1.0'], false, true, 'class-move-plan', ClassMovePlanApplier::class, EditMovePlanVerifier::class);
         $capabilities[] = new PlanCapability('method_move_plan', ['1.0'], true, false, 'method-move-plan', MethodMovePlanApplier::class, EditMovePlanVerifier::class);
+        $capabilities[] = new PlanCapability('method_copy_plan', ['1.0'], true, false, 'method-copy-plan', MethodInsertionPlanApplier::class, EditMovePlanVerifier::class);
+        $capabilities[] = new PlanCapability('method_scaffold_plan', ['1.0'], true, false, 'method-scaffold-plan', MethodInsertionPlanApplier::class, EditMovePlanVerifier::class);
         $capabilities[] = new PlanCapability('method_removal_plan', ['1.0'], true, false, 'method-removal-plan', MethodRemovalPlanApplier::class, MethodRemovalVerifier::class);
         $capabilities[] = new PlanCapability('property_removal_plan', ['1.0'], true, false, 'property-removal-plan', PropertyRemovalPlanApplier::class, PropertyRemovalVerifier::class);
         $capabilities[] = new PlanCapability('class_constant_removal_plan', ['1.0'], true, false, 'class-constant-removal-plan', ClassConstantRemovalPlanApplier::class, ClassConstantRemovalVerifier::class);

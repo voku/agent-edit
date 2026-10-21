@@ -11,7 +11,7 @@ use voku\AgentEdit\Capability\CapabilityRegistry;
 use voku\AgentEdit\Plan\SourceEditPlanDocument;
 
 
-/** Thin CLI over the package API: `apply`, `edit`, `undo`, `verify`, `schema` and `capabilities`. */
+/** Thin CLI over the package API: `apply`, `edit`, `undo`, `verify`, `schema`, `capabilities` and `instructions`. */
 final readonly class CliApplication
 {
     public function __construct(
@@ -34,6 +34,7 @@ final readonly class CliApplication
             'schema' => $this->schemaCommand($rest),
             'verify' => (new VerifyCommand($this->projectRoot))->run($rest),
             'capabilities' => $this->capabilitiesCommand($rest),
+            'instructions' => (new InstructionsCommand($this->capabilities))->run($rest),
             'help', '--help', '-h' => $this->help(),
             default => $this->unknown($command),
         };
@@ -130,8 +131,10 @@ Usage:
   agent-edit verify --bundle=PATH [--map-index PATH] [--map-root PATH]
   agent-edit schema [source_edit_plan]
   agent-edit capabilities [--format=json|toon] [--with-map=FILE|-]
+  agent-edit instructions [--format=json|toon] [--with-map=FILE|-]
 
 `--with-map` takes `agent-map plan-capabilities --format=json` and reports which plans are really executable.
+`instructions` emits reusable coding-agent guidance and the corresponding capability data.
 
 Plans come from `agent-map` (for example `agent-map method-move-plan`) or, for a quick local fix, from the caller as a
 `source_edit_plan` (`agent-edit edit`, or `agent-edit apply -` with the plan on stdin; `agent-edit schema` prints the

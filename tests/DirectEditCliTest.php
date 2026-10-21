@@ -58,6 +58,22 @@ final class DirectEditCliTest extends TestCase
         self::assertStringContainsString('already undone', $again['stderr']);
     }
 
+    public function testSuccessfulEditPrintsTheFilesAndReadyToRunVerifyAndUndoCommands(): void
+    {
+        $result = $this->cli(['edit', 'src/Calc.php', '--find=return $a - $b;', '--replace=return $a + $b;', '--task', 'hints']);
+
+        self::assertSame(0, $result['exit'], $result['stderr']);
+        self::assertStringContainsString('Direct edit bundle: ', $result['stdout']);
+        self::assertStringContainsString('- files: src/Calc.php', $result['stdout']);
+        self::assertStringContainsString('- verify: agent-edit verify --bundle=.agent-edit/receipts/hints', $result['stdout']);
+        self::assertStringContainsString('- undo: agent-edit undo --bundle=.agent-edit/receipts/hints', $result['stdout']);
+
+        $dry = $this->cli(['edit', 'src/Calc.php', '--find=return $a + $b;', '--replace=return $b + $a;', '--dry-run', '--task', 'dryhints']);
+        self::assertSame(0, $dry['exit'], $dry['stderr']);
+        self::assertStringNotContainsString('- undo:', $dry['stdout'], 'A dry run changed nothing, so there is nothing to undo.');
+        self::assertStringNotContainsString('- verify:', $dry['stdout']);
+    }
+
     public function testVerifyWithoutGitExitsThreeAndNamesTheMissingProof(): void
     {
         $this->cli(['edit', 'src/Calc.php', '--find=return $a - $b;', '--replace=return $a + $b;', '--task', 'fix']);

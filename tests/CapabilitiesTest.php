@@ -27,6 +27,8 @@ final class CapabilitiesTest extends TestCase
             'parameter_rename_plan',
             'class_move_plan',
             'method_move_plan',
+            'method_copy_plan',
+            'method_scaffold_plan',
             'method_removal_plan',
             'property_removal_plan',
             'class_constant_removal_plan',
@@ -46,8 +48,8 @@ final class CapabilitiesTest extends TestCase
             ],
         ]);
 
-        self::assertSame(['method_move_plan'], array_map(static fn (array $row): string => $row['map']['plan_type'], $result['executable']));
-        self::assertSame(['method_copy_plan', 'class_move_plan'], array_map(static fn (array $row): string => $row['plan_type'], $result['planned_not_executable']));
+        self::assertSame(['method_move_plan', 'method_copy_plan'], array_map(static fn (array $row): string => $row['map']['plan_type'], $result['executable']));
+        self::assertSame(['class_move_plan'], array_map(static fn (array $row): string => $row['plan_type'], $result['planned_not_executable']));
         self::assertContains('method_removal_plan', $result['executable_not_planned']);
         self::assertNotContains('method_move_plan', $result['executable_not_planned']);
     }
@@ -69,6 +71,55 @@ final class CapabilitiesTest extends TestCase
         $decoded = json_decode($output, true, 512, JSON_THROW_ON_ERROR);
         self::assertSame('method_move_plan', $decoded['capabilities'][7]['plan_type']);
         self::assertTrue($decoded['capabilities'][7]['transactional']);
+    }
+
+    public function testCliPrintsRegistryBackedCodingAgentInstructions(): void
+    {
+        ob_start();
+        $exit = (new CliApplication(sys_get_temp_dir()))->run(['agent-edit', 'instructions', '--format=json']);
+        $output = (string) ob_get_clean();
+
+        self::assertSame(0, $exit);
+        $decoded = json_decode($output, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('agent_edit_coding_agent_instructions', $decoded['type']);
+        self::assertSame('registry_only', $decoded['capability_resolution']);
+        self::assertCount(15, $decoded['plans']);
+        self::assertSame('agent-map rename-plan', $decoded['plans'][0]['agent_map_command']);
+        self::assertSame('agent-map function-rename-plan', $decoded['plans'][1]['agent_map_command']);
+        self::assertSame('must_match_installed_map', $decoded['plans'][0]['resolution']);
+        self::assertStringContainsString('normal coding and review workflow', implode(' ', $decoded['instructions']));
+    }
+
+    public function testInstructionsWithMapExposeOnlyExactExecutableIntersection(): void
+    {
+        $path = tempnam(sys_get_temp_dir(), 'agent-edit-map-capabilities-');
+        self::assertNotFalse($path);
+        file_put_contents($path, json_encode([
+            'type' => 'plan_capabilities',
+            'capabilities' => [
+                ['plan_type' => 'method_move_plan', 'contract_version' => '1.0', 'command' => 'method-move-plan', 'semantic_backend' => 'phpstan'],
+                ['plan_type' => 'method_move_plan', 'contract_version' => '2.0', 'command' => 'method-move-plan', 'semantic_backend' => 'phpstan'],
+                ['plan_type' => 'method_copy_plan', 'contract_version' => '1.0', 'command' => 'method-copy-plan', 'semantic_backend' => 'phpstan'],
+            ],
+        ], JSON_THROW_ON_ERROR));
+
+        try {
+            ob_start();
+            $exit = (new CliApplication(sys_get_temp_dir()))->run(['agent-edit', 'instructions', '--with-map=' . $path]);
+            $output = (string) ob_get_clean();
+        } finally {
+            unlink($path);
+        }
+
+        self::assertSame(0, $exit);
+        $decoded = json_decode($output, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('map_intersection', $decoded['capability_resolution']);
+        self::assertSame(['method_move_plan', 'method_copy_plan', 'source_edit_plan'], array_column($decoded['plans'], 'plan_type'), 'Map plans come from the installed Map; the Map-free direct plan is always available.');
+        self::assertSame('agent-map method-copy-plan', $decoded['plans'][1]['agent_map_command']);
+        self::assertSame('phpstan', $decoded['plans'][1]['semantic_backend']);
+        self::assertSame('executable_for_installed_map', $decoded['plans'][0]['resolution']);
+        self::assertSame(['method_move_plan'], array_column($decoded['capability_data']['planned_not_executable'], 'plan_type'));
+        self::assertSame(['2.0'], array_column($decoded['capability_data']['planned_not_executable'], 'contract_version'));
     }
 
     public function testEngineRejectsUnsupportedPlanTypeBeforeTouchingSource(): void
@@ -121,12 +172,9 @@ final class CapabilitiesTest extends TestCase
         $result = (new CapabilityRegistry())->intersect($payload);
 
         self::assertSame([], $result['executable_not_planned'], 'agent-edit executes a contract the installed agent-map no longer plans.');
-        self::assertCount(12, $result['executable']);
+        self::assertCount(14, $result['executable']);
         $plannedOnly = array_map(static fn (array $row): string => $row['plan_type'], $result['planned_not_executable']);
-        foreach ($plannedOnly as $type) {
-            // Anything Map plans but agent-edit cannot execute must be a known non-mutation-contract gap, never silent.
-            self::assertContains($type, ['method_copy_plan', 'class_scaffold_plan', 'method_scaffold_plan']);
-        }
+        self::assertSame(['class_scaffold_plan'], $plannedOnly, 'Every planned mutation contract except file creation must be executable through agent-edit.');
     }
 
     public function testRegistryIsTheOnlyPlanTypeListOutsideWireDecoders(): void
@@ -198,5 +246,48 @@ final class CapabilitiesTest extends TestCase
 
         self::assertCount(1, $result['executable']);
         self::assertSame(['source_edit_plan'], array_map(static fn (array $row): string => $row['plan_type'], $result['direct']));
+    }
+
+    public function testInstructionsDescribeTheDirectRouteWithoutInventingAMapCommand(): void
+    {
+        ob_start();
+        $exit = (new CliApplication(sys_get_temp_dir()))->run(['agent-edit', 'instructions', '--format=json']);
+        $decoded = json_decode((string) ob_get_clean(), true, 512, JSON_THROW_ON_ERROR);
+
+        self::assertSame(0, $exit);
+        $direct = array_values(array_filter($decoded['plans'], static fn (array $plan): bool => $plan['plan_type'] === 'source_edit_plan'));
+        self::assertCount(1, $direct);
+        self::assertNull($direct[0]['agent_map_command'], 'There is no `agent-map source-edit-plan`.');
+        self::assertSame('direct_no_map_required', $direct[0]['resolution']);
+        self::assertSame('caller', $direct[0]['authoring']);
+        self::assertSame('none', $direct[0]['semantic_backend']);
+        self::assertContains('agent-edit edit', $direct[0]['commands']);
+
+        foreach (array_diff_key($decoded['plans'], [array_key_last($decoded['plans']) => 1]) as $plan) {
+            self::assertStringStartsWith('agent-map ', (string) $plan['agent_map_command'], $plan['plan_type']);
+        }
+        $text = implode("\n", $decoded['instructions']);
+        foreach (['source_edit_plan', 'agent-edit edit FILE', 'agent-edit schema', 'allow_signature_change', 'agent-edit undo', 'normal coding and review workflow'] as $needle) {
+            self::assertStringContainsString($needle, $text);
+        }
+        self::assertStringNotContainsString('does not author arbitrary source edits', $text, 'The old "no direct edits" guidance contradicts the direct route.');
+    }
+
+    public function testInstructionsWithAnEmptyMapStillOfferTheDirectRoute(): void
+    {
+        $path = tempnam(sys_get_temp_dir(), 'agent-edit-map-capabilities-');
+        self::assertNotFalse($path);
+        file_put_contents($path, json_encode(['type' => 'plan_capabilities', 'capabilities' => []], JSON_THROW_ON_ERROR));
+        try {
+            ob_start();
+            $exit = (new CliApplication(sys_get_temp_dir()))->run(['agent-edit', 'instructions', '--with-map=' . $path]);
+            $decoded = json_decode((string) ob_get_clean(), true, 512, JSON_THROW_ON_ERROR);
+        } finally {
+            unlink($path);
+        }
+
+        self::assertSame(0, $exit);
+        self::assertSame(['source_edit_plan'], array_column($decoded['plans'], 'plan_type'));
+        self::assertSame('map_intersection', $decoded['capability_resolution']);
     }
 }

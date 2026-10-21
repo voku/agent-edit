@@ -10,6 +10,7 @@ use InvalidArgumentException;
 use RuntimeException;
 use Throwable;
 use voku\AgentEdit\Capability\CapabilityRegistry;
+use voku\AgentEdit\Plan\SourceEditPlanDocument;
 use voku\AgentEdit\EditEngine;
 use voku\AgentEdit\Receipt\ApplyRequest;
 use voku\AgentMap\MapArtifactPaths;
@@ -52,11 +53,15 @@ final readonly class ApplyCommand
                 authorizeMutation: $this->authorizeMutation,
             ));
 
-            echo "Refactor execution bundle prepared: {$receipt->bundleDirectory}\n";
+            $direct = $receipt->planType === SourceEditPlanDocument::TYPE;
+            echo ($direct ? 'Direct edit bundle: ' : 'Refactor execution bundle prepared: ') . "{$receipt->bundleDirectory}\n";
             echo '- plan: ' . ($receipt->planType !== '' ? $receipt->planType : 'unknown') . "\n";
             echo '- target: ' . ($receipt->targetId !== '' ? $receipt->targetId : 'unknown') . "\n";
             echo "- status: {$receipt->status}\n";
             echo "- execution: {$receipt->receiptPath}\n";
+            if ($direct) {
+                $this->printDirectEditNextSteps($receipt->receiptPath, $receipt->bundleDirectory, $receipt->status);
+            }
 
             return $receipt->succeeded() ? 0 : 1;
         } catch (Throwable $exception) {
@@ -193,6 +198,32 @@ final readonly class ApplyCommand
             'dry_run' => $dryRun,
             'staged' => $staged,
         ];
+    }
+
+    /** Tells the author which files the edit touched and exactly how to check or reverse it. */
+    private function printDirectEditNextSteps(string $receiptPath, string $bundleDirectory, string $status): void
+    {
+        $raw = @file_get_contents($receiptPath);
+        $receipt = is_string($raw) ? json_decode($raw, true) : null;
+        $files = is_array($receipt) && is_array($receipt['direct_edit']['files'] ?? null) ? $receipt['direct_edit']['files'] : [];
+        $paths = [];
+        foreach ($files as $file) {
+            if (is_array($file) && is_string($file['path'] ?? null)) {
+                $paths[] = $file['path'];
+            }
+        }
+        $root = realpath($this->projectRoot);
+        $root = is_string($root) ? rtrim(str_replace('\\', '/', $root), '/') . '/' : '';
+        $bundle = str_replace('\\', '/', $bundleDirectory);
+        $bundle = $root !== '' && str_starts_with($bundle, $root) ? substr($bundle, strlen($root)) : $bundle;
+
+        if ($paths !== []) {
+            echo '- files: ' . implode(', ', $paths) . "\n";
+        }
+        if ($status === 'runner_succeeded') {
+            echo "- verify: agent-edit verify --bundle={$bundle}\n";
+            echo "- undo: agent-edit undo --bundle={$bundle}\n";
+        }
     }
 
     private function assertLabel(string $taskId): void

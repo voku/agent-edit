@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `agent-edit instructions` emits coding-agent workflow guidance and capabilities from the executable registry, with an optional `--with-map` intersection so hosts can expose only plans supported by the installed `agent-map` version.
+- `method_copy_plan@1.0` and `method_scaffold_plan@1.0` are executable through the existing transaction and exact-candidate verifier. Both require safe PHPStan-backed Map evidence; copies with owner dependencies still refuse before mutation.
 - `source_edit_plan@1.0`, a caller-authored direct-edit capability that needs no `agent-map` index: exact `find`/`replace` anchors (unique, `occurrence` or `all`), optional per-edit file digests and `creates` for new files. Refusals are actionable (match line numbers, whitespace/line-ending differences, closest line). Rewritten and created PHP is syntax-checked and published through the new generic `FileTransaction` (stage, lint, back up, publish, roll back). A token-level `SignatureGuard` refuses removing, renaming or changing the signature of a class, function or non-private method unless `allow_signature_change` is set, and records the acknowledgement.
 - `agent-edit edit FILE --find ... --replace ...` (one edit; `--find-file`/`--replace-file` for multi-line text), `agent-edit apply -` (plan on stdin), `agent-edit undo --bundle=PATH` and `agent-edit schema`. Direct-edit receipts bind per-file digests and pre-images; `undo` restores them only while every touched file still has the published digest. `verify` of a direct edit needs no Map.
 - `agent-edit capabilities` reports `requires_map`; `--with-map` lists Map-free capabilities under `direct` instead of `executable_not_planned`.
