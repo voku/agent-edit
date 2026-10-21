@@ -11,6 +11,8 @@ final readonly class EditResult
         public ?int $exitCode = null,
         public string $stdout = '',
         public string $stderr = '',
+        /** @var array<string, mixed> applier-specific facts a receipt may bind (never authority) */
+        public array $evidence = [],
     ) {
     }
 

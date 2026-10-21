@@ -1,0 +1,273 @@
+<?php
+
+declare(strict_types=1);
+
+namespace voku\AgentEdit\Apply;
+
+use Closure;
+use RuntimeException;
+use voku\AgentEdit\Plan\SourceEdit;
+use voku\AgentEdit\Plan\SourceEditPlanDocument;
+
+/**
+ * Applies a caller-authored `source_edit_plan` without a Map: anchors are resolved against the current bytes, the whole
+ * result is built in memory, API-changing edits are refused unless acknowledged, and publication goes through the same
+ * stage / lint / back up / publish / roll back transaction every other capability uses.
+ */
+final readonly class SourceEditPlanApplier implements MaplessPlanApplier
+{
+    private FileTransaction $transaction;
+
+    /**
+     * @param (Closure(string, string): bool)|null $renameOperation
+     * @param (Closure(string): array{exit_code: int, stdout: string, stderr: string})|null $lintOperation
+     */
+    public function __construct(?Closure $renameOperation = null, ?Closure $lintOperation = null)
+    {
+        $this->transaction = new FileTransaction($renameOperation, $lintOperation);
+    }
+
+    /** @param array<string, mixed> $plan */
+    public function preflight(array $plan, string $root): array
+    {
+        $prepared = $this->prepare(SourceEditPlanDocument::fromArray($plan), $root);
+        $files = [];
+        $hashes = [];
+        foreach ($prepared->files as $file) {
+            $absolute = $this->absolute($root, $file['path']);
+            $files[$absolute] = $file['after'];
+            if ($file['before_sha256'] !== null) {
+                $hashes[$absolute] = 'sha256:' . $file['before_sha256'];
+            }
+        }
+        ksort($files, SORT_STRING);
+        ksort($hashes, SORT_STRING);
+
+        return [
+            'files' => $files,
+            'final_paths' => array_combine(array_keys($files), array_keys($files)),
+            'source_hashes' => $hashes,
+            'plan_type' => SourceEditPlanDocument::TYPE,
+            'edit_count' => $prepared->editCount,
+            'move_count' => 0,
+            'creation_count' => $prepared->creationCount,
+        ];
+    }
+
+    /** @param array<string, mixed> $plan */
+    public function apply(array $plan, string $root): EditResult
+    {
+        $prepared = $this->prepare(SourceEditPlanDocument::fromArray($plan), $root);
+        $warnings = $this->transaction->run($prepared->operations, $root);
+
+        $evidence = [];
+        $preImages = [];
+        foreach ($prepared->files as $file) {
+            if ($file['before'] !== null) {
+                $preImages[$file['path']] = $file['before'];
+            }
+            $evidence[] = [
+                'path' => $file['path'],
+                'before_sha256' => $file['before_sha256'],
+                'after_sha256' => $file['after_sha256'],
+                'edits' => $file['edits'],
+            ];
+        }
+
+        return new EditResult(
+            status: 'runner_succeeded',
+            exitCode: 0,
+            stdout: sprintf(
+                "%s applied %d edit(s) and %d creation(s) across %d file(s).\n",
+                SourceEditPlanDocument::TYPE,
+                $prepared->editCount,
+                $prepared->creationCount,
+                count($prepared->files),
+            ),
+            stderr: $warnings === [] ? '' : "source_edit_plan completed with cleanup warning(s):\n- " . implode("\n- ", $warnings),
+            evidence: [
+                'files' => $evidence,
+                'acknowledged_api_changes' => $prepared->acknowledgedApiChanges,
+                'pre_images' => $preImages,
+            ],
+        );
+    }
+
+    /**
+     * Resolves every anchor and builds every final content. Pure: nothing is written.
+     *
+     * @throws RuntimeException with an actionable message when any edit cannot be proven
+     */
+    public function prepare(SourceEditPlanDocument $plan, string $root): SourceEditPreparation
+    {
+        $realRoot = realpath($root);
+        if (!is_string($realRoot)) {
+            throw new RuntimeException('Unable to resolve the project root.');
+        }
+        $realRoot = rtrim(str_replace('\\', '/', $realRoot), '/');
+
+        /** @var array<string, string> $original */
+        $original = [];
+        /** @var array<string, list<array{int, int, string}>> $byFile */
+        $byFile = [];
+        foreach ($plan->edits as $position => $edit) {
+            $path = $this->existingFile($realRoot, $edit->path, $position);
+            $content = $original[$path] ??= $this->read($path, $edit->path);
+            if ($edit->expectedSourceSha256 !== null && !hash_equals($edit->expectedSourceSha256, 'sha256:' . hash('sha256', $content))) {
+                throw new RuntimeException(sprintf('edits[%d]: %s changed since you read it (expected_source_sha256 no longer matches). Re-read the file and rebuild the edit.', $position, $edit->path));
+            }
+            foreach ($this->resolve($edit, $content, $position) as $range) {
+                $byFile[$path][] = $range;
+            }
+        }
+
+        $operations = [];
+        $files = [];
+        $acknowledged = [];
+        $guard = new SignatureGuard();
+        ksort($byFile, SORT_STRING);
+        foreach ($byFile as $path => $ranges) {
+            $before = $original[$path];
+            usort($ranges, static fn (array $left, array $right): int => $left[0] <=> $right[0]);
+            $after = '';
+            $cursor = 0;
+            foreach ($ranges as [$start, $end, $replacement]) {
+                if ($start < $cursor) {
+                    throw new RuntimeException(sprintf(
+                        'Two edits overlap in %s (around line %d). Merge them into one edit or anchor them on disjoint text.',
+                        $this->relative($realRoot, $path),
+                        AnchorHint::line($before, $start),
+                    ));
+                }
+                $after .= substr($before, $cursor, $start - $cursor) . $replacement;
+                $cursor = $end;
+            }
+            $after .= substr($before, $cursor);
+
+            if (str_ends_with(strtolower($path), '.php')) {
+                $changes = $guard->changes($before, $after);
+                if ($changes !== []) {
+                    if (!$plan->allowSignatureChange) {
+                        throw new RuntimeException($this->apiChangeRefusal($this->relative($realRoot, $path), $changes));
+                    }
+                    foreach ($changes as $change) {
+                        $acknowledged[] = $this->relative($realRoot, $path) . ': ' . $change;
+                    }
+                }
+            }
+
+            $beforeHash = hash('sha256', $before);
+            $operations[] = FileOperation::write($path, $after, $beforeHash);
+            $files[] = [
+                'path' => $this->relative($realRoot, $path),
+                'before_sha256' => $beforeHash,
+                'after_sha256' => hash('sha256', $after),
+                'before' => $before,
+                'after' => $after,
+                'edits' => count($ranges),
+            ];
+        }
+
+        foreach ($plan->creates as $create) {
+            $absolute = $realRoot . '/' . $create->path;
+            if (file_exists($absolute) || is_link($absolute)) {
+                throw new RuntimeException('creates: ' . $create->path . ' already exists. Use an edit to change it, or pick another path.');
+            }
+            $operations[] = FileOperation::write($absolute, $create->content, null);
+            $files[] = [
+                'path' => $create->path,
+                'before_sha256' => null,
+                'after_sha256' => hash('sha256', $create->content),
+                'before' => null,
+                'after' => $create->content,
+                'edits' => 0,
+            ];
+        }
+
+        usort($files, static fn (array $left, array $right): int => strcmp($left['path'], $right['path']));
+
+        return new SourceEditPreparation($operations, $files, count($plan->edits), count($plan->creates), $acknowledged);
+    }
+
+    /**
+     * @param list<string> $changes
+     */
+    private function apiChangeRefusal(string $path, array $changes): string
+    {
+        $listed = array_slice($changes, 0, 3);
+        $more = count($changes) > 3 ? sprintf(' (+%d more)', count($changes) - 3) : '';
+
+        return sprintf(
+            'The edit changes an API other files may call in %s: %s%s. A direct edit has no caller evidence. Use an agent-map plan (rename/move/removal) so callers are proven, or, after checking the callers yourself, set "allow_signature_change": true.',
+            $path,
+            implode('; ', $listed),
+            $more,
+        );
+    }
+
+    /** @return list<array{int, int, string}> start offset, end offset (exclusive), replacement */
+    private function resolve(SourceEdit $edit, string $content, int $position): array
+    {
+        $offsets = AnchorHint::offsets($content, $edit->find);
+        if ($offsets === []) {
+            throw new RuntimeException(sprintf('edits[%d]: %s', $position, AnchorHint::missing($edit->path, $content, $edit->find)));
+        }
+
+        if ($edit->all) {
+            $selected = $offsets;
+        } elseif ($edit->occurrence !== null) {
+            if ($edit->occurrence > count($offsets)) {
+                throw new RuntimeException(sprintf('edits[%d]: occurrence %d requested but `find` occurs only %d time(s) in %s.', $position, $edit->occurrence, count($offsets), $edit->path));
+            }
+            $selected = [$offsets[$edit->occurrence - 1]];
+        } elseif (count($offsets) > 1) {
+            throw new RuntimeException(sprintf('edits[%d]: %s', $position, AnchorHint::ambiguous($edit->path, $content, $edit->find, $offsets)));
+        } else {
+            $selected = $offsets;
+        }
+
+        return array_map(
+            static fn (int $offset): array => [$offset, $offset + strlen($edit->find), $edit->replace],
+            $selected,
+        );
+    }
+
+    private function existingFile(string $realRoot, string $relative, int $position): string
+    {
+        $path = $realRoot . '/' . $relative;
+        if (is_link($path) || !is_file($path)) {
+            throw new RuntimeException(sprintf('edits[%d]: %s does not exist as a regular file. To add a new file use "creates".', $position, $relative));
+        }
+        $real = realpath($path);
+        if (!is_string($real) || !str_starts_with(str_replace('\\', '/', $real), $realRoot . '/')) {
+            throw new RuntimeException(sprintf('edits[%d]: %s resolves outside the project root.', $position, $relative));
+        }
+
+        return str_replace('\\', '/', $real);
+    }
+
+    private function read(string $path, string $display): string
+    {
+        $content = file_get_contents($path);
+        if (!is_string($content)) {
+            throw new RuntimeException('Unable to read ' . $display . '.');
+        }
+        if (str_contains($content, "\0")) {
+            throw new RuntimeException($display . ' looks binary (contains a NUL byte); direct edits only change text files.');
+        }
+
+        return $content;
+    }
+
+    private function relative(string $realRoot, string $path): string
+    {
+        return substr($path, strlen($realRoot) + 1);
+    }
+
+    private function absolute(string $root, string $relative): string
+    {
+        $realRoot = realpath($root);
+
+        return rtrim(str_replace('\\', '/', is_string($realRoot) ? $realRoot : $root), '/') . '/' . $relative;
+    }
+}

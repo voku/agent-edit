@@ -10,8 +10,23 @@ use voku\AgentEdit\Apply\MutationLock;
 
 require dirname(__DIR__, 2) . '/vendor/autoload.php';
 
-[, $root, $log, $name, $holdMs] = $argv;
-$heldMarker = $argv[5] ?? '';
+$arguments = $_SERVER['argv'] ?? null;
+if (!is_array($arguments)
+    || !is_string($arguments[1] ?? null)
+    || !is_string($arguments[2] ?? null)
+    || !is_string($arguments[3] ?? null)
+    || !is_string($arguments[4] ?? null)
+) {
+    throw new RuntimeException('Mutation lock worker requires root, log, name and hold-ms arguments.');
+}
+$root = $arguments[1];
+$log = $arguments[2];
+$name = $arguments[3];
+$holdMs = $arguments[4];
+$heldMarker = $arguments[5] ?? '';
+if (!is_string($heldMarker)) {
+    throw new RuntimeException('Mutation lock worker held-marker-file must be a string.');
+}
 
 $record = static function (string $line) use ($log): void {
     file_put_contents($log, $line . "\n", FILE_APPEND | LOCK_EX);

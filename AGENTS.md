@@ -6,14 +6,15 @@
 
 ## Dependency direction
 
-`agent-map` is below `agent-edit`; `agent-edit` is below `agent-loop`. Never depend on `agent-loop`, `agent-recall-compiler` or any LLM client. Host authorization is injected (`ApplyRequest::$authorizeMutation`), never imported.
+`agent-map` is below `agent-edit`; `agent-edit` is below `agent-loop`. Never depend on `agent-loop`, `agent-recall-compiler` or any LLM client. Host authorization is injected (`ApplyRequest::$authorizeMutation` and `EditEngine::undo()`), never imported.
 
 ## Invariants
 
-- A plan is evidence, never authority. Revalidate provenance, source hashes, byte ranges, blockers, review-required state and staleness immediately before writing, and again under the mutation lock.
+- A plan (Map-produced or caller-authored) is evidence, never authority. Revalidate provenance, source hashes, byte ranges, blockers, review-required state and staleness immediately before writing, and again under the mutation lock.
 - Fail closed. `review_required`, blocked, stale or conflicting plans never write.
 - Publication is all-or-nothing: stage, syntax-check, back up, publish, roll back every source on failure.
 - Do not invent edits, destinations or refactoring candidates. Unsupported plan types stay explicit rejections.
+- A `source_edit_plan` applies only text the caller supplied. Its anchors, digests, syntax, API-change guard, transaction, receipt and undo are still proven here; it never replaces a Map plan for renames, moves or removals, because callers need evidence a direct edit does not carry.
 - `CapabilityRegistry` is the single list of executable contracts; `EditEngine`, the CLI and docs must not diverge from it.
 - No git commit/push, no network, no model calls.
 

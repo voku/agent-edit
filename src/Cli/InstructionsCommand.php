@@ -51,6 +51,12 @@ final readonly class InstructionsCommand
 
                     return $this->describePlan($map);
                 }, $capabilityData['executable']);
+                // Caller-authored plans need no Map, so the installed Map can neither enable nor disable them.
+                foreach ($this->capabilities->all() as $capability) {
+                    if (!$capability->requiresMap) {
+                        $plans[] = $this->describeCapability($capability, true);
+                    }
+                }
                 $resolved = true;
             }
         } catch (InvalidArgumentException|JsonException $exception) {
@@ -64,13 +70,16 @@ final readonly class InstructionsCommand
             'type' => 'agent_edit_coding_agent_instructions',
             'capability_resolution' => $resolved ? 'map_intersection' : 'registry_only',
             'instructions' => [
-                'Use agent-edit only for deterministic, agent-map-generated PHP refactor plans. It does not author arbitrary source edits, choose refactorings, or call a model.',
-                'Build a fresh agent-map index for the task scope before planning. Check the installed Map plan capabilities and use only an exact plan_type and contract_version supported by both Map and agent-edit.',
-                'The plans list is the exact Map/Edit intersection when capability_resolution is map_intersection. With registry_only, it is only agent-edit’s upper bound; confirm each plan against the installed Map before using it.',
-                'Generate the plan with its listed agent-map command; consult that command’s --help for exact target arguments. If requires_phpstan is true, use a PHPStan-backed Map. Inspect the full plan and stop if it is not safe, requires review, has blockers, blind spots, or stale evidence. Do not bypass a refusal or rewrite plan evidence by hand.',
+                'Two routes. A change that reaches other files (rename, move or remove a class, method, property or constant) needs caller evidence: use a deterministic agent-map plan. A quick local fix (a body edit, config or documentation text, a new file, a change to a private method) reaches no other file: author a source_edit_plan yourself, which needs no Map. agent-edit never chooses refactorings and never calls a model.',
+                'Map route: build a fresh agent-map index for the task scope before planning. Check the installed Map plan capabilities and use only an exact plan_type and contract_version supported by both Map and agent-edit.',
+                'The plans list is the exact Map/Edit intersection (plus the Map-free direct plan) when capability_resolution is map_intersection. With registry_only, it is only agent-edit’s upper bound; confirm each Map plan against the installed Map before using it.',
+                'Generate a Map plan with its listed agent-map command; consult that command’s --help for exact target arguments. If requires_phpstan is true, use a PHPStan-backed Map. Inspect the full plan and stop if it is not safe, requires review, has blockers, blind spots, or stale evidence. Do not bypass a refusal or rewrite plan evidence by hand.',
                 'Run agent-edit apply PLAN --dry-run first. Apply only if preflight accepts, then rebuild the same Map and run agent-edit verify against the returned receipt bundle.',
-                'Treat verification as proof of the plan’s structural postcondition, not behavioral correctness. Run the repository’s relevant tests and static analysis as well; resolve open residue and verify again.',
-                'If no listed plan describes the requested operation, use the host’s normal coding and review workflow for that change. Do not force arbitrary method-body rewrites, scaffolds, or behavior changes into agent-edit.',
+                'Direct route: read the file first and anchor on text you have just read. Run agent-edit edit FILE --find TEXT --replace TEXT (use --find-file/--replace-file for multi-line text), or agent-edit apply - with a source_edit_plan on stdin for several edits or new files; agent-edit schema prints the contract. Add --dry-run to validate without writing.',
+                'Read a refusal and act on it: an ambiguous anchor lists its lines (add context, or set occurrence/all), a whitespace mismatch points at the real line, a changed file must be re-read, and an API change (removing, renaming or changing the signature of a class, function or non-private method) needs an agent-map plan, or allow_signature_change after you checked the callers yourself. Never retry the same refused edit unchanged.',
+                'After a direct edit run agent-edit verify --bundle=BUNDLE. agent-edit undo --bundle=BUNDLE restores the pre-edit bytes, and refuses once a touched file changed again, so undo later edits first.',
+                'Treat verification as proof of the edit’s structural postcondition, not behavioral correctness. Run the repository’s relevant tests and static analysis as well; resolve open residue and verify again.',
+                'If neither route fits the requested operation (for example a behavior change spanning many files), use the host’s normal coding and review workflow for that change. Do not force it into agent-edit.',
             ],
             'plans' => $plans,
             'capability_data' => $capabilityData,
@@ -132,6 +141,20 @@ final readonly class InstructionsCommand
     /** @return array<string, mixed> */
     private function describeCapability(PlanCapability $capability, bool $resolved, ?string $command = null, ?string $version = null, ?string $backend = null): array
     {
+        if (!$capability->requiresMap) {
+            return [
+                'plan_type' => $capability->planType,
+                'contract_versions' => $capability->contractVersions,
+                'agent_map_command' => null,
+                'semantic_backend' => 'none',
+                'resolution' => 'direct_no_map_required',
+                'authoring' => 'caller',
+                'commands' => ['agent-edit edit', 'agent-edit apply -', 'agent-edit schema', 'agent-edit undo'],
+                'requires_phpstan' => false,
+                'moves_files' => false,
+            ];
+        }
+
         return [
             'plan_type' => $capability->planType,
             'contract_versions' => $resolved ? [$version] : $capability->contractVersions,

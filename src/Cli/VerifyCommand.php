@@ -37,9 +37,12 @@ final readonly class VerifyCommand
 
         $plan = is_array($result['plan'] ?? null) ? $result['plan'] : [];
         $runner = is_string($plan['type'] ?? null) ? $this->engine->capabilities()->find($plan['type'])?->runner : null;
-        $label = is_string($runner) && str_ends_with($runner, '-removal-plan')
-            ? ucfirst(substr($runner, 0, -strlen('-removal-plan'))) . ' removal'
-            : 'Refactor';
+        $direct = $runner === 'source-edit-plan';
+        $label = $direct
+            ? 'Direct edit'
+            : (is_string($runner) && str_ends_with($runner, '-removal-plan')
+                ? ucfirst(substr($runner, 0, -strlen('-removal-plan'))) . ' removal'
+                : 'Refactor');
         $candidate = str_starts_with($options['bundle'], '/') ? $options['bundle'] : $this->projectRoot . '/' . $options['bundle'];
         $bundle = str_replace('\\', '/', (string) realpath($candidate));
         $status = is_string($result['status'] ?? null) ? $result['status'] : 'passed';
@@ -52,12 +55,14 @@ final readonly class VerifyCommand
             } elseif (($imports['status'] ?? null) === 'open') {
                 $note = ' (import_residue_open: ' . (int) ($imports['open'] ?? 0) . ' `use` import(s) orphaned by the deletion remain)';
             } else {
-                $note = ' (scope_unproven: only Map-indexed files were observed)';
+                $note = $direct
+                    ? ' (scope_unproven: no Git working tree, so files outside the plan were not observed)'
+                    : ' (scope_unproven: only Map-indexed files were observed)';
             }
         }
         echo $label . ' verification: ' . $status . $note . "\n";
         echo '- bundle: ' . $bundle . "\n";
-        if ($label === 'Refactor') {
+        if ($label === 'Refactor' || $direct) {
             echo '- plan: ' . (string) ($plan['type'] ?? '') . '@' . (string) ($plan['contract_version'] ?? '') . "\n";
         }
         echo '- target: ' . (string) ($plan['target_id'] ?? '') . "\n";

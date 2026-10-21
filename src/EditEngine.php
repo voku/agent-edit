@@ -4,12 +4,16 @@ declare(strict_types=1);
 
 namespace voku\AgentEdit;
 
+use Closure;
 use HelgeSverre\Toon\Toon;
 use InvalidArgumentException;
 use JsonException;
 use RuntimeException;
 use Throwable;
 use voku\AgentEdit\Apply\EditResult;
+use voku\AgentEdit\Apply\FileOperation;
+use voku\AgentEdit\Apply\FileTransaction;
+use voku\AgentEdit\Apply\MaplessPlanApplier;
 use voku\AgentEdit\Apply\MutationLock;
 use voku\AgentEdit\Apply\PlanApplier;
 use voku\AgentEdit\Apply\WorkingTreeSnapshotter;
@@ -21,7 +25,9 @@ use voku\AgentEdit\Receipt\ReceiptNotPersistedException;
 use voku\AgentEdit\Verify\BundleVerifier;
 use voku\AgentEdit\Verify\ImportResidueCheck;
 use voku\AgentEdit\Verify\MapManifestEvidence;
+use voku\AgentEdit\Verify\MaplessBundleVerifier;
 use voku\AgentEdit\Verify\ResidueCheck;
+use voku\AgentEdit\Verify\SourceEditVerifier;
 use voku\AgentMap\Index\AgentMapIndex;
 use voku\AgentMap\Index\IndexReader;
 use voku\AgentMap\MapArtifactPaths;
@@ -38,10 +44,11 @@ final readonly class EditEngine
 {
     public const RECEIPT_FILE = 'execution.json';
     public const VERIFICATION_FILE = 'verification-result.json';
+    public const UNDO_RESULT_FILE = SourceEditVerifier::UNDO_RESULT_FILE;
 
     /**
-     * @param array<class-string<PlanApplier>, PlanApplier> $applierOverrides test seams keyed by applier class
-     * @param array<class-string<BundleVerifier>, BundleVerifier> $verifierOverrides
+     * @param array<class-string<PlanApplier|MaplessPlanApplier>, PlanApplier|MaplessPlanApplier> $applierOverrides test seams keyed by applier class
+     * @param array<class-string<BundleVerifier|MaplessBundleVerifier>, BundleVerifier|MaplessBundleVerifier> $verifierOverrides
      */
     public function __construct(
         private CapabilityRegistry $capabilities = new CapabilityRegistry(),
@@ -62,11 +69,17 @@ final readonly class EditEngine
      * Validates the complete plan against current source and Map evidence; nothing is written.
      *
      * @param array<string, mixed> $plan decoded plan document
-     * @return array{files: array<string, string>, final_paths: array<string, string>, source_hashes: array<string, string>, plan_type: string, edit_count: int, move_count: int, deletion_count?: int}
+     * @param AgentMapIndex|null $map required for every Map plan; `source_edit_plan` needs none
+     * @return array{files: array<string, string>, final_paths: array<string, string>, source_hashes: array<string, string>, plan_type: string, edit_count: int, move_count: int, deletion_count?: int, creation_count?: int}
      */
-    public function preflight(array $plan, AgentMapIndex $map, string $repositoryRoot): array
+    public function preflight(array $plan, ?AgentMapIndex $map, string $repositoryRoot): array
     {
-        return $this->applier($plan)->preflight($plan, $map, $repositoryRoot);
+        $applier = $this->applier($plan);
+        if ($applier instanceof MaplessPlanApplier) {
+            return $applier->preflight($plan, $repositoryRoot);
+        }
+
+        return $applier->preflight($plan, $this->requireMap($map), $repositoryRoot);
     }
 
     /**
@@ -75,9 +88,16 @@ final readonly class EditEngine
      *
      * @param array<string, mixed> $plan decoded plan document
      */
-    public function apply(array $plan, AgentMapIndex $map, string $repositoryRoot): EditResult
+    public function apply(array $plan, ?AgentMapIndex $map, string $repositoryRoot): EditResult
     {
         $applier = $this->applier($plan);
+        if ($applier instanceof MaplessPlanApplier) {
+            return $this->mutationLock->synchronized(
+                $repositoryRoot,
+                static fn (): EditResult => $applier->apply($plan, $repositoryRoot),
+            );
+        }
+        $map = $this->requireMap($map);
 
         return $this->mutationLock->synchronized(
             $repositoryRoot,
@@ -115,13 +135,19 @@ final readonly class EditEngine
         }
         $plan = $this->decodePlan($request->planPath, $planRaw);
         $capability = $this->capability($plan);
+        if (!$capability->requiresMap) {
+            return $this->applyDirectAndPersist($request, $plan, $planRaw, $capability);
+        }
+        if ($request->mapIndexPath === null) {
+            throw new InvalidArgumentException('This plan type needs an agent-map index; pass --map-index.');
+        }
 
         $map = $this->reader->read($request->mapIndexPath);
         $mapIndexHash = hash_file('sha256', $request->mapIndexPath);
         if (!is_string($mapIndexHash)) {
             throw new RuntimeException('Unable to hash agent-map index: ' . $request->mapIndexPath);
         }
-        $applier = $this->applier($plan);
+        $applier = $this->mapApplier($plan);
         $snapshotter = $this->snapshotter;
         $before = null;
         $after = null;
@@ -263,6 +289,254 @@ final readonly class EditEngine
     }
 
     /**
+     * Receipt flow for plan families that need no Map: the same lock, authorization, before/after observation and
+     * atomic receipt as Map plans, plus the pre-images `undo()` needs.
+     *
+     * @param array<string, mixed> $plan
+     */
+    private function applyDirectAndPersist(ApplyRequest $request, array $plan, string $planRaw, PlanCapability $capability): EditReceipt
+    {
+        $applier = $this->applier($plan);
+        if (!$applier instanceof MaplessPlanApplier) {
+            throw new RuntimeException('Plan capability is not a Map-free applier.');
+        }
+        $snapshotter = $this->snapshotter;
+        $before = null;
+        $after = null;
+        $failure = null;
+
+        if ($request->dryRun) {
+            $before = $snapshotter->capture($request->repositoryRoot);
+            $prepared = $applier->preflight($plan, $request->repositoryRoot);
+            $result = new EditResult(
+                status: 'prepared',
+                exitCode: 0,
+                stdout: sprintf(
+                    "%s validated %d edit(s) and %d creation(s) across %d file(s); no source was changed.\n",
+                    $prepared['plan_type'],
+                    $prepared['edit_count'],
+                    $prepared['creation_count'],
+                    count($prepared['files']),
+                ),
+            );
+        } else {
+            // Pure and write-free: an edit that cannot be proven (ambiguous anchor, stale text, API change) is refused
+            // here, before authorization, and leaves no receipt behind.
+            $applier->preflight($plan, $request->repositoryRoot);
+            if ($request->authorizeMutation !== null) {
+                ($request->authorizeMutation)($request->label);
+            }
+            try {
+                $result = $this->mutationLock->synchronized(
+                    $request->repositoryRoot,
+                    static function () use ($applier, $plan, $request, $snapshotter, &$before, &$after): EditResult {
+                        $before = $snapshotter->capture($request->repositoryRoot);
+                        try {
+                            $result = $applier->apply($plan, $request->repositoryRoot);
+                        } catch (Throwable $exception) {
+                            $after = $snapshotter->capture($request->repositoryRoot);
+                            throw $exception;
+                        }
+                        $after = $snapshotter->capture($request->repositoryRoot);
+
+                        return $result;
+                    },
+                );
+            } catch (Throwable $exception) {
+                if ($before === null || $after === null) {
+                    throw $exception;
+                }
+                $result = new EditResult(status: 'runner_failed', exitCode: 1, stderr: $exception->getMessage());
+                $failure = $exception;
+            }
+        }
+        $after ??= $snapshotter->capture($request->repositoryRoot);
+        if ($before === null) {
+            throw new RuntimeException('Direct edit completed without a working-tree observation.');
+        }
+
+        $receiptPath = $request->outputDirectory . '/' . self::RECEIPT_FILE;
+        $changedFiles = $after->changedPathsSince($before);
+        try {
+            $direct = [];
+            if ($result->status === 'runner_succeeded') {
+                /** @var array<string, string> $preImages */
+                $preImages = is_array($result->evidence['pre_images'] ?? null) ? $result->evidence['pre_images'] : [];
+                $files = is_array($result->evidence['files'] ?? null) ? $result->evidence['files'] : [];
+                $recorded = [];
+                foreach ($files as $file) {
+                    if (!is_array($file) || !is_string($file['path'] ?? null)) {
+                        continue;
+                    }
+                    $preImage = null;
+                    if (isset($preImages[$file['path']])) {
+                        $preImage = 'before/' . $file['path'];
+                        $this->writeAtomically($request->outputDirectory . '/' . $preImage, $preImages[$file['path']]);
+                    }
+                    $recorded[] = $file + ['pre_image' => $preImage];
+                }
+                // `git status` cannot see ignored files; the verifier proves those by digest alone and says so.
+                $paths = array_map(static fn (array $file): string => (string) $file['path'], $recorded);
+                $direct = ['direct_edit' => [
+                    'files' => $recorded,
+                    'git_ignored' => $before->available ? $snapshotter->ignoredPaths($request->repositoryRoot, $paths) : [],
+                    'acknowledged_api_changes' => $result->evidence['acknowledged_api_changes'] ?? [],
+                ]];
+            }
+            $this->writeAtomically($receiptPath, $this->json([
+                'schema_version' => '1.0',
+                'status' => $result->status,
+                'task_id' => $request->label,
+                'plan' => [
+                    'path' => $request->planPath,
+                    'sha256' => 'sha256:' . hash('sha256', $planRaw),
+                    'type' => $plan['type'] ?? null,
+                    'contract_version' => $plan['contract_version'] ?? null,
+                    'target_id' => $plan['target_id'] ?? null,
+                ],
+                'map_digest' => null,
+                'map_index_sha256' => null,
+                'runner' => [
+                    'name' => $capability->runner,
+                    'exit_code' => $result->exitCode,
+                    'dry_run' => $request->dryRun,
+                    'model_input_tokens' => 0,
+                    'model_tool_calls' => 0,
+                ],
+                'changed_files' => $changedFiles,
+                'changed_files_source' => $before->available && $after->available ? 'git_status_diff' : 'unavailable',
+            ] + $direct));
+        } catch (Throwable $writeFailure) {
+            if ($failure !== null) {
+                throw $failure;
+            }
+            if (!$request->dryRun && $result->status === 'runner_succeeded') {
+                throw new ReceiptNotPersistedException($changedFiles, $request->outputDirectory, $writeFailure);
+            }
+
+            throw $writeFailure;
+        }
+
+        $receipt = new EditReceipt(
+            $result->status,
+            $result->exitCode,
+            $request->outputDirectory,
+            $receiptPath,
+            (string) ($plan['type'] ?? ''),
+            (string) ($plan['target_id'] ?? ''),
+        );
+        if ($failure !== null) {
+            throw $failure;
+        }
+
+        return $receipt;
+    }
+
+    /**
+     * Restores the exact pre-edit bytes recorded in an applied `source_edit_plan` bundle, and removes the files that
+     * edit created. Fails closed: every touched file must still have exactly the digest the edit published, so edits made
+     * afterwards (by anyone) are never overwritten.
+     *
+     * @param (Closure(string): void)|null $authorizeMutation host authorization hook called immediately before restore
+     * @return array<string, mixed> the undo result document (also persisted as `undo-result.json`)
+     */
+    public function undo(string $repositoryRoot, string $bundle, ?Closure $authorizeMutation = null): array
+    {
+        $root = realpath($repositoryRoot);
+        if (!is_string($root)) {
+            throw new RuntimeException('Project root not found: ' . $repositoryRoot);
+        }
+        $bundlePath = $this->insideExisting($root, $bundle, 'bundle', true);
+        $receipt = $this->readReceipt($bundlePath . '/' . self::RECEIPT_FILE);
+        if (($receipt['runner']['name'] ?? null) !== 'source-edit-plan'
+            || ($receipt['status'] ?? null) !== 'runner_succeeded'
+            || ($receipt['runner']['dry_run'] ?? null) !== false
+        ) {
+            throw new RuntimeException('Only a successfully applied source_edit_plan bundle can be undone.');
+        }
+        if (is_file($bundlePath . '/' . self::UNDO_RESULT_FILE)) {
+            throw new RuntimeException('This edit was already undone.');
+        }
+        $recorded = $receipt['direct_edit']['files'] ?? null;
+        if (!is_array($recorded) || !array_is_list($recorded) || $recorded === []) {
+            throw new RuntimeException('Bundle has no direct_edit file evidence to undo.');
+        }
+
+        $root = rtrim(str_replace('\\', '/', $root), '/');
+        $operations = [];
+        $restored = [];
+        $removed = [];
+        foreach ($recorded as $file) {
+            if (!is_array($file) || !is_string($file['path'] ?? null) || !is_string($file['after_sha256'] ?? null)) {
+                throw new RuntimeException('Bundle contains malformed direct_edit file evidence.');
+            }
+            $relative = $this->canonicalRelative($file['path']);
+            $absolute = $root . '/' . $relative;
+            $beforeSha = $file['before_sha256'] ?? null;
+            if ($beforeSha === null) {
+                $operations[] = FileOperation::delete($absolute, $file['after_sha256']);
+                $removed[] = $relative;
+                continue;
+            }
+            if (!is_string($beforeSha) || !is_string($file['pre_image'] ?? null)) {
+                throw new RuntimeException('Bundle is missing the pre-image for ' . $relative . '.');
+            }
+            $preImage = $bundlePath . '/' . $this->canonicalRelative($file['pre_image']);
+            $content = is_file($preImage) && !is_link($preImage) ? file_get_contents($preImage) : false;
+            if (!is_string($content) || !hash_equals($beforeSha, hash('sha256', $content))) {
+                throw new RuntimeException('Recorded pre-image of ' . $relative . ' is missing or was altered; refusing to restore it.');
+            }
+            $operations[] = FileOperation::write($absolute, $content, $file['after_sha256']);
+            $restored[] = $relative;
+        }
+
+        $transaction = new FileTransaction();
+        $transaction->preflight($operations, $root);
+        if ($authorizeMutation !== null) {
+            $authorizeMutation((string) ($receipt['task_id'] ?? ''));
+        }
+        $this->mutationLock->synchronized($root, static function () use ($transaction, $operations, $root): EditResult {
+            $transaction->run($operations, $root);
+
+            return new EditResult(status: 'runner_succeeded', exitCode: 0);
+        });
+        foreach ($removed as $relative) {
+            for ($directory = dirname($root . '/' . $relative); $directory !== $root && str_starts_with($directory, $root . '/'); $directory = dirname($directory)) {
+                if (!is_dir($directory) || (new \FilesystemIterator($directory))->valid() || !@rmdir($directory)) {
+                    break;
+                }
+            }
+        }
+
+        $result = [
+            'schema_version' => '1.0',
+            'kind' => 'source_edit_plan_undo',
+            'status' => 'undone',
+            'task_id' => (string) ($receipt['task_id'] ?? ''),
+            'restored' => $restored,
+            'removed' => $removed,
+        ];
+        $this->writeAtomically($bundlePath . '/' . self::UNDO_RESULT_FILE, $this->json($result));
+
+        return $result;
+    }
+
+    private function canonicalRelative(string $path): string
+    {
+        $path = str_replace('\\', '/', $path);
+        if ($path === '' || str_starts_with($path, '/') || str_contains($path, "\0")) {
+            throw new RuntimeException('Bundle contains a non-relative path: ' . $path);
+        }
+        foreach (explode('/', $path) as $segment) {
+            if ($segment === '' || $segment === '.' || $segment === '..') {
+                throw new RuntimeException('Bundle contains a non-canonical path: ' . $path);
+            }
+        }
+
+        return $path;
+    }
+
+    /**
      * Verifies one applied receipt bundle against current source and a refreshed Map, and persists
      * `verification-result.json` into the bundle. All inputs must stay inside the repository root.
      *
@@ -280,9 +554,6 @@ final readonly class EditEngine
         if ((file_exists($verificationPath) || is_link($verificationPath)) && !@unlink($verificationPath)) {
             throw new RuntimeException('Unable to invalidate previous refactor verification result.');
         }
-        $mapIndexPath = $this->insideExisting($root, $mapIndex ?? MapArtifactPaths::forProject($root)->indexJson(), 'map index', false);
-        $mapRootPath = $this->insideExisting($root, $mapRoot, 'map root', true);
-
         $receipt = $this->readReceipt($bundlePath . '/' . self::RECEIPT_FILE);
         $runner = $receipt['runner']['name'] ?? null;
         $capability = is_string($runner) ? $this->capabilities->findByRunner($runner) : null;
@@ -291,6 +562,14 @@ final readonly class EditEngine
         }
 
         $verifier = $this->verifierOverrides[$capability->verifier] ?? new ($capability->verifier)();
+        if ($verifier instanceof MaplessBundleVerifier) {
+            $result = $verifier->verify($bundlePath, $root);
+            $this->writeAtomically($verificationPath, $this->json($result));
+
+            return $result;
+        }
+        $mapIndexPath = $this->insideExisting($root, $mapIndex ?? MapArtifactPaths::forProject($root)->indexJson(), 'map index', false);
+        $mapRootPath = $this->insideExisting($root, $mapRoot, 'map root', true);
         $result = $verifier->verify($bundlePath, $mapIndexPath, $mapRootPath);
         $result = (new ResidueCheck())->apply($result, $this->boundPlan($receipt), $mapRootPath, $acceptResidue);
         $result = (new ImportResidueCheck())->apply($result, $this->boundPlan($receipt), $mapRootPath, $acceptResidue);
@@ -327,11 +606,27 @@ final readonly class EditEngine
     }
 
     /** @param array<string, mixed> $plan */
-    private function applier(array $plan): PlanApplier
+    private function applier(array $plan): PlanApplier|MaplessPlanApplier
     {
         $class = $this->capability($plan)->applier;
 
         return $this->applierOverrides[$class] ?? new $class();
+    }
+
+    /** @param array<string, mixed> $plan */
+    private function mapApplier(array $plan): PlanApplier
+    {
+        $applier = $this->applier($plan);
+        if (!$applier instanceof PlanApplier) {
+            throw new RuntimeException('Plan capability is not a Map-backed applier.');
+        }
+
+        return $applier;
+    }
+
+    private function requireMap(?AgentMapIndex $map): AgentMapIndex
+    {
+        return $map ?? throw new InvalidArgumentException('This plan type needs an agent-map index.');
     }
 
     /** @return array<string, mixed> */

@@ -4,18 +4,21 @@ declare(strict_types=1);
 
 namespace voku\AgentEdit\Cli;
 
+use Closure;
 use HelgeSverre\Toon\Toon;
 use InvalidArgumentException;
 use JsonException;
 use voku\AgentEdit\Capability\CapabilityRegistry;
+use voku\AgentEdit\Plan\SourceEditPlanDocument;
 
 
-/** Thin CLI over the package API: `apply`, `verify`, `capabilities` and `instructions`. */
+/** Thin CLI over the package API: `apply`, `edit`, `undo`, `verify`, `schema`, `capabilities` and `instructions`. */
 final readonly class CliApplication
 {
     public function __construct(
         private string $projectRoot,
         private CapabilityRegistry $capabilities = new CapabilityRegistry(),
+        private ?Closure $authorizeMutation = null,
     ) {
     }
 
@@ -27,7 +30,10 @@ final readonly class CliApplication
         $rest = array_slice($tokens, 1);
 
         return match ($command) {
-            'apply' => (new ApplyCommand($this->projectRoot))->run($rest),
+            'apply' => (new ApplyCommand($this->projectRoot, authorizeMutation: $this->authorizeMutation))->run($rest),
+            'edit' => (new EditCommand($this->projectRoot, authorizeMutation: $this->authorizeMutation))->run($rest),
+            'undo' => (new UndoCommand($this->projectRoot, authorizeMutation: $this->authorizeMutation))->run($rest),
+            'schema' => $this->schemaCommand($rest),
             'verify' => (new VerifyCommand($this->projectRoot))->run($rest),
             'capabilities' => $this->capabilitiesCommand($rest),
             'instructions' => (new InstructionsCommand($this->capabilities))->run($rest),
@@ -79,6 +85,19 @@ final readonly class CliApplication
         return 0;
     }
 
+    /** @param list<string> $tokens */
+    private function schemaCommand(array $tokens): int
+    {
+        if ($tokens !== [] && $tokens !== [SourceEditPlanDocument::TYPE]) {
+            fwrite(STDERR, "[ERROR] Usage: agent-edit schema [source_edit_plan]\n");
+
+            return 2;
+        }
+        echo json_encode(SourceEditPlanDocument::schema(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n";
+
+        return 0;
+    }
+
     /** @return array<mixed> */
     private function readMapCapabilities(string $source): array
     {
@@ -108,16 +127,22 @@ final readonly class CliApplication
 agent-edit - deterministic, evidence-backed source mutation for coding agents.
 
 Usage:
-  agent-edit apply PLAN [--dry-run] [--map-index PATH] [--map-root PATH] [--output-dir PATH] [--task LABEL]
+  agent-edit apply PLAN|- [--dry-run] [--map-index PATH] [--map-root PATH] [--output-dir PATH] [--task LABEL]
+  agent-edit edit FILE (--find TEXT | --find-file PATH) (--replace TEXT | --replace-file PATH) [--occurrence N | --all]
+  agent-edit undo --bundle=PATH
   agent-edit verify --bundle=PATH [--map-index PATH] [--map-root PATH]
+  agent-edit schema [source_edit_plan]
   agent-edit capabilities [--format=json|toon] [--with-map=FILE|-]
   agent-edit instructions [--format=json|toon] [--with-map=FILE|-]
 
 `--with-map` takes `agent-map plan-capabilities --format=json` and reports which plans are really executable.
 `instructions` emits reusable coding-agent guidance and the corresponding capability data.
 
-Plans come from `agent-map` (for example `agent-map method-move-plan`). agent-edit never invents edits,
-never calls a model, and never decides whether a task may mutate: that authority stays with the caller.
+Plans come from `agent-map` (for example `agent-map method-move-plan`) or, for a quick local fix, from the caller as a
+`source_edit_plan` (`agent-edit edit`, or `agent-edit apply -` with the plan on stdin; `agent-edit schema` prints the
+contract). Direct edits need no Map: the exact text you name is the evidence, and API-changing edits are refused.
+agent-edit never invents edits, never calls a model, and never decides whether a task may mutate: that authority stays
+with the caller.
 
 TXT;
 
