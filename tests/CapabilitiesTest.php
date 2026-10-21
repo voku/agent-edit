@@ -27,6 +27,8 @@ final class CapabilitiesTest extends TestCase
             'parameter_rename_plan',
             'class_move_plan',
             'method_move_plan',
+            'method_copy_plan',
+            'method_scaffold_plan',
             'method_removal_plan',
             'property_removal_plan',
             'class_constant_removal_plan',
@@ -45,8 +47,8 @@ final class CapabilitiesTest extends TestCase
             ],
         ]);
 
-        self::assertSame(['method_move_plan'], array_map(static fn (array $row): string => $row['map']['plan_type'], $result['executable']));
-        self::assertSame(['method_copy_plan', 'class_move_plan'], array_map(static fn (array $row): string => $row['plan_type'], $result['planned_not_executable']));
+        self::assertSame(['method_move_plan', 'method_copy_plan'], array_map(static fn (array $row): string => $row['map']['plan_type'], $result['executable']));
+        self::assertSame(['class_move_plan'], array_map(static fn (array $row): string => $row['plan_type'], $result['planned_not_executable']));
         self::assertContains('method_removal_plan', $result['executable_not_planned']);
         self::assertNotContains('method_move_plan', $result['executable_not_planned']);
     }
@@ -80,7 +82,7 @@ final class CapabilitiesTest extends TestCase
         $decoded = json_decode($output, true, 512, JSON_THROW_ON_ERROR);
         self::assertSame('agent_edit_coding_agent_instructions', $decoded['type']);
         self::assertSame('registry_only', $decoded['capability_resolution']);
-        self::assertCount(12, $decoded['plans']);
+        self::assertCount(14, $decoded['plans']);
         self::assertSame('agent-map rename-plan', $decoded['plans'][0]['agent_map_command']);
         self::assertSame('agent-map function-rename-plan', $decoded['plans'][1]['agent_map_command']);
         self::assertSame('must_match_installed_map', $decoded['plans'][0]['resolution']);
@@ -94,9 +96,9 @@ final class CapabilitiesTest extends TestCase
         file_put_contents($path, json_encode([
             'type' => 'plan_capabilities',
             'capabilities' => [
-                ['plan_type' => 'method_move_plan', 'contract_version' => '1.0'],
-                ['plan_type' => 'method_move_plan', 'contract_version' => '2.0'],
-                ['plan_type' => 'method_copy_plan', 'contract_version' => '1.0'],
+                ['plan_type' => 'method_move_plan', 'contract_version' => '1.0', 'command' => 'method-move-plan', 'semantic_backend' => 'phpstan'],
+                ['plan_type' => 'method_move_plan', 'contract_version' => '2.0', 'command' => 'method-move-plan', 'semantic_backend' => 'phpstan'],
+                ['plan_type' => 'method_copy_plan', 'contract_version' => '1.0', 'command' => 'method-copy-plan', 'semantic_backend' => 'phpstan'],
             ],
         ], JSON_THROW_ON_ERROR));
 
@@ -111,9 +113,11 @@ final class CapabilitiesTest extends TestCase
         self::assertSame(0, $exit);
         $decoded = json_decode($output, true, 512, JSON_THROW_ON_ERROR);
         self::assertSame('map_intersection', $decoded['capability_resolution']);
-        self::assertSame(['method_move_plan'], array_column($decoded['plans'], 'plan_type'));
+        self::assertSame(['method_move_plan', 'method_copy_plan'], array_column($decoded['plans'], 'plan_type'));
+        self::assertSame('agent-map method-copy-plan', $decoded['plans'][1]['agent_map_command']);
+        self::assertSame('phpstan', $decoded['plans'][1]['semantic_backend']);
         self::assertSame('executable_for_installed_map', $decoded['plans'][0]['resolution']);
-        self::assertSame(['method_move_plan', 'method_copy_plan'], array_column($decoded['capability_data']['planned_not_executable'], 'plan_type'));
+        self::assertSame([], $decoded['capability_data']['planned_not_executable']);
     }
 
     public function testEngineRejectsUnsupportedPlanTypeBeforeTouchingSource(): void
@@ -166,12 +170,9 @@ final class CapabilitiesTest extends TestCase
         $result = (new CapabilityRegistry())->intersect($payload);
 
         self::assertSame([], $result['executable_not_planned'], 'agent-edit executes a contract the installed agent-map no longer plans.');
-        self::assertCount(12, $result['executable']);
+        self::assertCount(14, $result['executable']);
         $plannedOnly = array_map(static fn (array $row): string => $row['plan_type'], $result['planned_not_executable']);
-        foreach ($plannedOnly as $type) {
-            // Anything Map plans but agent-edit cannot execute must be a known non-mutation-contract gap, never silent.
-            self::assertContains($type, ['method_copy_plan', 'class_scaffold_plan', 'method_scaffold_plan']);
-        }
+        self::assertSame(['class_scaffold_plan'], $plannedOnly, 'Every planned mutation contract except file creation must be executable through agent-edit.');
     }
 
     public function testRegistryIsTheOnlyPlanTypeListOutsideWireDecoders(): void

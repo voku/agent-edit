@@ -44,12 +44,12 @@ final readonly class InstructionsCommand
             } else {
                 $capabilityData = $this->capabilities->intersect($this->readMapCapabilities($mapCapabilities));
                 $plans = array_map(function (array $entry): array {
-                    $planType = $entry['map']['plan_type'] ?? null;
-                    if (!is_string($planType)) {
-                        throw new InvalidArgumentException('Map/Edit intersection contains a malformed plan type.');
+                    $map = $entry['map'] ?? null;
+                    if (!is_array($map)) {
+                        throw new InvalidArgumentException('Map/Edit intersection contains malformed planner capability evidence.');
                     }
 
-                    return $this->describePlan($planType, true);
+                    return $this->describePlan($map);
                 }, $capabilityData['executable']);
                 $resolved = true;
             }
@@ -108,23 +108,32 @@ final readonly class InstructionsCommand
     }
 
     /** @return array<string, mixed> */
-    private function describePlan(string $planType, bool $resolved): array
+    private function describePlan(array $map): array
     {
+        $planType = $map['plan_type'] ?? null;
+        $command = $map['command'] ?? null;
+        $version = $map['contract_version'] ?? null;
+        $backend = $map['semantic_backend'] ?? null;
+        if (!is_string($planType) || !is_string($command) || !preg_match('/^[a-z][a-z0-9-]*$/', $command)
+            || !is_string($version) || !is_string($backend) || $backend === '') {
+            throw new InvalidArgumentException('Map/Edit intersection lacks exact planner command evidence.');
+        }
         $capability = $this->capabilities->find($planType);
         if ($capability === null) {
             throw new InvalidArgumentException('Map/Edit intersection contains an unknown agent-edit capability.');
         }
 
-        return $this->describeCapability($capability, $resolved);
+        return $this->describeCapability($capability, true, $command, $version, $backend);
     }
 
     /** @return array<string, mixed> */
-    private function describeCapability(PlanCapability $capability, bool $resolved): array
+    private function describeCapability(PlanCapability $capability, bool $resolved, ?string $command = null, ?string $version = null, ?string $backend = null): array
     {
         return [
             'plan_type' => $capability->planType,
-            'contract_versions' => $capability->contractVersions,
-            'agent_map_command' => 'agent-map ' . $capability->agentMapCommand(),
+            'contract_versions' => $resolved ? [$version] : $capability->contractVersions,
+            'agent_map_command' => 'agent-map ' . ($command ?? $capability->agentMapCommand()),
+            'semantic_backend' => $backend ?? ($capability->requiresPhpStan ? 'phpstan' : 'none'),
             'resolution' => $resolved ? 'executable_for_installed_map' : 'must_match_installed_map',
             'requires_phpstan' => $capability->requiresPhpStan,
             'moves_files' => $capability->movesFiles,

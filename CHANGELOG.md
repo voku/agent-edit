@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - `agent-edit instructions` emits coding-agent workflow guidance and capabilities from the executable registry, with an optional `--with-map` intersection so hosts can expose only plans supported by the installed `agent-map` version.
+- `method_copy_plan@1.0` and `method_scaffold_plan@1.0` are executable through the existing transaction and exact-candidate verifier. Both require safe PHPStan-backed Map evidence; copies with owner dependencies still refuse before mutation.
 
 ## 0.4.4 - 2026-10-09
 

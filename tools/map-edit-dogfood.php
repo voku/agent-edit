@@ -184,6 +184,26 @@ $scenarios = [
             }
         },
     ),
+    'method-copy' => static fn () => $happy(
+        'method-copy',
+        ['src/Source.php' => php("final class Source\n{\n    public static function normalize(string \$value): string\n    {\n        return trim(\$value);\n    }\n}"), 'src/Destination.php' => php("final class Destination\n{\n}")],
+        "method-copy-plan 'Demo\\Source::normalize' 'Demo\\Destination' --name=normalizeCopy",
+        'method_copy_plan',
+        static function (string $dir): void {
+            assertContains($dir, 'src/Source.php', 'function normalize');
+            assertContains($dir, 'src/Destination.php', 'function normalizeCopy');
+        },
+    ),
+    'method-scaffold' => static fn () => $happy(
+        'method-scaffold',
+        ['src/Destination.php' => php("final class Destination\n{\n}")],
+        "method-scaffold-plan 'Demo\\Destination::parse' --param='string \$value' --return=string --doc='Parse a value.'",
+        'method_scaffold_plan',
+        static function (string $dir): void {
+            assertContains($dir, 'src/Destination.php', 'function parse(string $value): string');
+            assertContains($dir, 'src/Destination.php', '* Parse a value.');
+        },
+    ),
     // Fail-closed: the source changed after planning, so the plan's SHA-256 evidence no longer matches.
     'stale-plan-rejected' => static function () use ($build, $map, $edit): void {
         $dir = fixture(['src/Service.php' => php("final class Service\n{\n    public function oldName(): int\n    {\n        return 1;\n    }\n}")]);
