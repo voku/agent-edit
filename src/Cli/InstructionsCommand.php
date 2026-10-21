@@ -107,7 +107,10 @@ final readonly class InstructionsCommand
         return $decoded;
     }
 
-    /** @return array<string, mixed> */
+    /**
+     * @param array<string, mixed> $map
+     * @return array<string, mixed>
+     */
     private function describePlan(array $map): array
     {
         $planType = $map['plan_type'] ?? null;
