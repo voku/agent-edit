@@ -34,9 +34,15 @@ vendor/bin/agent-edit verify --bundle=.agent-edit/receipts/<label>
 ```bash
 vendor/bin/agent-edit capabilities --format=json
 vendor/bin/agent-map plan-capabilities --format=json | vendor/bin/agent-edit capabilities --with-map=-
+vendor/bin/agent-edit instructions --format=json
+vendor/bin/agent-map plan-capabilities --format=json | vendor/bin/agent-edit instructions --with-map=-
 ```
 
 The second command intersects what Map can *plan* with what agent-edit can *execute*: `executable`, `planned_not_executable` (for example `method_copy_plan`) and `executable_not_planned`. A host should expose only the intersection to a coding agent.
+
+`instructions` emits prompt-ready JSON with a short operating procedure and the plan commands from the same executable capability registry. Without `--with-map`, it labels the registry as an upper bound; piping current Map capabilities through `--with-map=-` resolves the exact installed intersection. Hosts can include this output in a coding agent's context instead of maintaining a second, drifting list of executable refactors.
+
+The guidance keeps the boundary explicit: Map proposes a versioned plan, agent-edit validates and applies only that plan, and the host handles arbitrary behavioral edits and their semantic review. It does not add model calls or make agent-edit a free-form editor.
 
 `class_removal_plan` deletes exactly one whole file: the plan must be `safe` (no blockers, blind spots or stale evidence), publish no edits or moves, and name the single owned source file with its hash. Apply re-proves the hash, the target's sole declaration and the absence of incoming Map evidence before the file is moved aside, hash-checked and discarded; verify requires the file and class to be gone from a rebuilt Map.
 

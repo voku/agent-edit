@@ -70,6 +70,51 @@ final class CapabilitiesTest extends TestCase
         self::assertTrue($decoded['capabilities'][7]['transactional']);
     }
 
+    public function testCliPrintsRegistryBackedCodingAgentInstructions(): void
+    {
+        ob_start();
+        $exit = (new CliApplication(sys_get_temp_dir()))->run(['agent-edit', 'instructions', '--format=json']);
+        $output = (string) ob_get_clean();
+
+        self::assertSame(0, $exit);
+        $decoded = json_decode($output, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('agent_edit_coding_agent_instructions', $decoded['type']);
+        self::assertSame('registry_only', $decoded['capability_resolution']);
+        self::assertCount(12, $decoded['plans']);
+        self::assertSame('agent-map method-rename-plan', $decoded['plans'][0]['agent_map_command']);
+        self::assertSame('must_match_installed_map', $decoded['plans'][0]['resolution']);
+        self::assertStringContainsString('normal coding and review workflow', implode(' ', $decoded['instructions']));
+    }
+
+    public function testInstructionsWithMapExposeOnlyExactExecutableIntersection(): void
+    {
+        $path = tempnam(sys_get_temp_dir(), 'agent-edit-map-capabilities-');
+        self::assertNotFalse($path);
+        file_put_contents($path, json_encode([
+            'type' => 'plan_capabilities',
+            'capabilities' => [
+                ['plan_type' => 'method_move_plan', 'contract_version' => '1.0'],
+                ['plan_type' => 'method_move_plan', 'contract_version' => '2.0'],
+                ['plan_type' => 'method_copy_plan', 'contract_version' => '1.0'],
+            ],
+        ], JSON_THROW_ON_ERROR));
+
+        try {
+            ob_start();
+            $exit = (new CliApplication(sys_get_temp_dir()))->run(['agent-edit', 'instructions', '--with-map=' . $path]);
+            $output = (string) ob_get_clean();
+        } finally {
+            unlink($path);
+        }
+
+        self::assertSame(0, $exit);
+        $decoded = json_decode($output, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('map_intersection', $decoded['capability_resolution']);
+        self::assertSame(['method_move_plan'], array_column($decoded['plans'], 'plan_type'));
+        self::assertSame('executable_for_installed_map', $decoded['plans'][0]['resolution']);
+        self::assertSame(['method_move_plan', 'method_copy_plan'], array_column($decoded['capability_data']['planned_not_executable'], 'plan_type'));
+    }
+
     public function testEngineRejectsUnsupportedPlanTypeBeforeTouchingSource(): void
     {
         $this->expectException(InvalidArgumentException::class);
