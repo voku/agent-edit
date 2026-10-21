@@ -117,7 +117,8 @@ final class CapabilitiesTest extends TestCase
         self::assertSame('agent-map method-copy-plan', $decoded['plans'][1]['agent_map_command']);
         self::assertSame('phpstan', $decoded['plans'][1]['semantic_backend']);
         self::assertSame('executable_for_installed_map', $decoded['plans'][0]['resolution']);
-        self::assertSame([], $decoded['capability_data']['planned_not_executable']);
+        self::assertSame(['method_move_plan'], array_column($decoded['capability_data']['planned_not_executable'], 'plan_type'));
+        self::assertSame(['2.0'], array_column($decoded['capability_data']['planned_not_executable'], 'contract_version'));
     }
 
     public function testEngineRejectsUnsupportedPlanTypeBeforeTouchingSource(): void
