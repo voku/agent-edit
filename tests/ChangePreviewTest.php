@@ -141,7 +141,17 @@ final class ChangePreviewTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('Unable to read source for the change preview');
 
-        ChangePreview::fromPreflight(['files' => [$this->root . '/src/Gone.php' => 'x'], 'final_paths' => [], 'source_hashes' => []], $this->root);
+        ChangePreview::fromPreflight(['files' => [$this->root . '/src/Gone.php' => 'x'], 'final_paths' => [], 'source_hashes' => [$this->root . '/src/Gone.php' => 'sha256:x']], $this->root);
+    }
+
+    public function testAFileWithoutASourceHashThatDoesNotExistYetIsACreation(): void
+    {
+        $path = $this->root . '/src/New/Made.php';
+
+        $preview = ChangePreview::fromPreflight(['files' => [$path => "<?php\n"], 'final_paths' => [$path => $path], 'source_hashes' => []], $this->root);
+
+        self::assertSame([['path' => 'src/New/Made.php', 'change' => 'created', 'lines_added' => 1, 'lines_removed' => 0]], $preview['changes']);
+        self::assertSame("--- /dev/null\n+++ b/src/New/Made.php\n@@ -0,0 +1 @@\n+<?php\n", $preview['diff']);
     }
 
     public function testPathsOutsideTheRootStayAbsoluteInsteadOfBeingMangled(): void

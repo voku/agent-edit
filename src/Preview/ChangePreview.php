@@ -35,16 +35,18 @@ final class ChangePreview
         sort($paths, SORT_STRING);
 
         foreach ($paths as $source) {
-            $original = self::read($source);
+            // The direct-edit and scaffold preflights list a file to create under `files` without a source hash.
+            $creation = !isset($prepared['source_hashes'][$source]) && !is_file($source) && isset($prepared['files'][$source]);
+            $original = $creation ? '' : self::read($source);
             $deleted = !isset($prepared['files'][$source]);
             $content = $deleted ? '' : $prepared['files'][$source];
             $final = $deleted ? $source : ($prepared['final_paths'][$source] ?? $source);
             $moved = $final !== $source;
             $oldLabel = self::relative($base, $source);
             $newLabel = $deleted ? '/dev/null' : self::relative($base, $final);
-            $text = UnifiedDiff::between($original, $content, 'a/' . $oldLabel, $deleted ? $newLabel : 'b/' . $newLabel);
+            $text = UnifiedDiff::between($original, $content, $creation ? '/dev/null' : 'a/' . $oldLabel, $deleted ? $newLabel : 'b/' . $newLabel);
 
-            $change = $deleted ? 'deleted' : ($moved ? ($text['diff'] === '' ? 'moved' : 'moved_and_modified') : 'modified');
+            $change = $creation ? 'created' : ($deleted ? 'deleted' : ($moved ? ($text['diff'] === '' ? 'moved' : 'moved_and_modified') : 'modified'));
             $entry = ['path' => $oldLabel, 'change' => $change];
             if ($moved) {
                 $entry['final_path'] = $newLabel;

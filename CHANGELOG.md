@@ -15,6 +15,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `agent-edit capabilities` reports `requires_map`; `--with-map` lists Map-free capabilities under `direct` instead of `executable_not_planned`.
 - `EditEngine::undo()`, `EditEngine::preflight()`/`apply()` accept a `null` Map for Map-free plans, `ApplyRequest::$mapIndexPath` may be `null` for them, and `EditResult` carries applier `evidence`.
 
+- `apply --dry-run` (and `edit --dry-run`) lists every file it would create, modify, move or delete with added/removed line counts; `--diff` prints the unified diff. The preview is derived only from the applier's own preflight result, and a test proves the previewed diff equals the diff of the real apply. `EditReceipt` gains `plannedChanges`, `diff` and `changedFiles`; a dry-run `execution.json` records `planned_changes` (never the diff).
+- `--format=json` for `apply`, `edit` and `verify`: exactly one JSON document on stdout, also for a failure, with the same exit codes as text mode. Success carries `status`, `plan`, `bundle`, `changed_files` or `planned_changes` and a `next_action` (`verify` for a Map-free edit, `refresh_map_then_verify` for a Map plan); a failure carries `error.code`, `error.next_action`, `error.hint` and `error.details`. An `incomplete` verification names its `reason` (`residue_open`, `import_residue_open` or `scope_unproven`).
+- Stable failure codes (`FailureCode`): `usage`, `input_not_found`, `plan_malformed`, `plan_unsupported`, `plan_refused`, `evidence_stale`, `evidence_changed`, `map_backend_unsupported`, `anchor_missing`, `anchor_ambiguous`, `edits_overlap`, `api_change_refused`, `target_exists`, `apply_failed` and `failed`. They are carried by `EditFailure` (a `RuntimeException`) and `InvalidInputFailure` (an `InvalidArgumentException`), so existing `catch` blocks and `getMessage()` callers keep working. A refused plan's `details` list every blocker, stale-evidence and blind-spot entry (up to 20). Failure sites that are not migrated stay unclassified (`failed`); nothing is guessed from message text.
+
+### Changed
+
+- An unsupported plan names the type and contract version it saw; an unparsable plan names the file and the parser message instead of a bare `Syntax error`; "Refactor refactor plan not found" is now "Refactor plan not found".
+
 ### Fixed
 
 - Verifying an edit of a file Git ignores no longer fails with "changed_files do not match plan scope": ignored plan files are recorded at apply time, proven by digest and reported in `git_ignored_files_proven_by_digest_only`.

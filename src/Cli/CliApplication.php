@@ -127,10 +127,10 @@ final readonly class CliApplication
 agent-edit - deterministic, evidence-backed source mutation for coding agents.
 
 Usage:
-  agent-edit apply PLAN|- [--dry-run] [--map-index PATH] [--map-root PATH] [--output-dir PATH] [--task LABEL]
+  agent-edit apply PLAN|- [--dry-run [--diff]] [--map-index PATH] [--map-root PATH] [--output-dir PATH] [--task LABEL] [--format=text|json]
   agent-edit edit FILE (--find TEXT | --find-file PATH) (--replace TEXT | --replace-file PATH) [--occurrence N | --all]
   agent-edit undo --bundle=PATH
-  agent-edit verify --bundle=PATH [--map-index PATH] [--map-root PATH]
+  agent-edit verify --bundle=PATH [--map-index PATH] [--map-root PATH] [--format=text|json]
   agent-edit schema [source_edit_plan]
   agent-edit capabilities [--format=json|toon] [--with-map=FILE|-]
   agent-edit instructions [--format=json|toon] [--with-map=FILE|-]

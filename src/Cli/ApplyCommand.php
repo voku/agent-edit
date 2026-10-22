@@ -6,13 +6,15 @@ namespace voku\AgentEdit\Cli;
 
 use Closure;
 use HelgeSverre\Toon\Toon;
-use InvalidArgumentException;
 use RuntimeException;
 use Throwable;
 use voku\AgentEdit\Capability\CapabilityRegistry;
 use voku\AgentEdit\Plan\SourceEditPlanDocument;
 use voku\AgentEdit\EditEngine;
+use voku\AgentEdit\Failure\FailureCode;
+use voku\AgentEdit\Failure\InvalidInputFailure;
 use voku\AgentEdit\Receipt\ApplyRequest;
+use voku\AgentEdit\Receipt\EditReceipt;
 use voku\AgentEdit\Receipt\ReceiptNotPersistedException;
 use voku\AgentMap\MapArtifactPaths;
 
@@ -40,6 +42,7 @@ final readonly class ApplyCommand
         }
 
         $staged = null;
+        $json = $this->wantsJson($tokens);
         try {
             $request = $this->parse($tokens);
             $staged = $request['staged'];
@@ -55,6 +58,11 @@ final readonly class ApplyCommand
             ));
 
             $direct = $receipt->planType === SourceEditPlanDocument::TYPE;
+            if ($json) {
+                echo FailureReport::encode($this->successPayload($receipt, $request['dry_run'], $request['show_diff'], $direct));
+
+                return $receipt->succeeded() ? 0 : 1;
+            }
             echo ($direct ? 'Direct edit bundle: ' : 'Refactor execution bundle prepared: ') . "{$receipt->bundleDirectory}\n";
             echo '- plan: ' . ($receipt->planType !== '' ? $receipt->planType : 'unknown') . "\n";
             echo '- target: ' . ($receipt->targetId !== '' ? $receipt->targetId : 'unknown') . "\n";
@@ -62,6 +70,14 @@ final readonly class ApplyCommand
             echo "- execution: {$receipt->receiptPath}\n";
             if ($direct) {
                 $this->printDirectEditNextSteps($receipt->receiptPath, $receipt->bundleDirectory, $receipt->status);
+            }
+            if ($request['dry_run']) {
+                foreach ($receipt->plannedChanges as $change) {
+                    echo '- would change: ' . $change['path'] . ' (' . $change['change'] . ', +' . $change['lines_added'] . ' -' . $change['lines_removed'] . ")\n";
+                }
+                if ($request['show_diff'] && $receipt->diff !== '') {
+                    echo "\n" . $receipt->diff;
+                }
             }
 
             return $receipt->succeeded() ? 0 : 1;
@@ -78,10 +94,62 @@ final readonly class ApplyCommand
                     }
                 }
             }
+            if ($json) {
+                echo FailureReport::encode(['schema_version' => '1.0', 'command' => 'apply', 'ok' => false, 'error' => FailureReport::describe($exception)]);
+
+                return 1;
+            }
             fwrite(STDERR, '[ERROR] ' . $exception->getMessage() . "\n");
 
             return 1;
         }
+    }
+
+    /** @return array<string, mixed> */
+    private function successPayload(EditReceipt $receipt, bool $dryRun, bool $showDiff, bool $direct): array
+    {
+        $payload = [
+            'schema_version' => '1.0',
+            'command' => 'apply',
+            'ok' => $receipt->succeeded(),
+            'status' => $receipt->status,
+            'dry_run' => $dryRun,
+            'plan' => ['type' => $receipt->planType, 'target_id' => $receipt->targetId],
+            'bundle' => $receipt->bundleDirectory,
+            'receipt' => $receipt->receiptPath,
+        ];
+        if ($dryRun) {
+            $payload['planned_changes'] = $receipt->plannedChanges;
+            if ($showDiff) {
+                $payload['diff'] = $receipt->diff;
+            }
+        } else {
+            $payload['changed_files'] = $receipt->changedFiles;
+            if ($direct) {
+                // Without Git nothing observes the tree; the receipt's own per-file digests still name what the edit wrote.
+                $recorded = $this->directEditPaths($receipt->receiptPath);
+                if ($receipt->changedFiles === [] && $recorded !== []) {
+                    $payload['changed_files'] = $recorded;
+                    $payload['changed_files_source'] = 'receipt_digests';
+                }
+            }
+        }
+        // A Map plan is verified against a Map rebuilt after the edit; saying so saves the failed verify an agent would try first.
+        $payload['next_action'] = $receipt->succeeded() ? ($dryRun ? 'apply' : ($direct ? 'verify' : 'refresh_map_then_verify')) : 'inspect_working_tree';
+
+        return $payload;
+    }
+
+    /** @param list<string> $tokens */
+    private function wantsJson(array $tokens): bool
+    {
+        foreach ($tokens as $index => $token) {
+            if ($token === '--format=json' || ($token === '--format' && ($tokens[$index + 1] ?? null) === 'json')) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -93,6 +161,8 @@ final readonly class ApplyCommand
      *     map_root: string,
      *     output_directory: string,
      *     dry_run: bool,
+     *     show_diff: bool,
+     *     format: 'text'|'json',
      *     staged: array{plan: string, created: list<string>}|null
      * }
      */
@@ -100,13 +170,14 @@ final readonly class ApplyCommand
     {
         $root = realpath($this->projectRoot);
         if (!is_string($root) || !is_dir($root)) {
-            throw new InvalidArgumentException('Project root not found: ' . $this->projectRoot);
+            throw new InvalidInputFailure('Project root not found: ' . $this->projectRoot, FailureCode::InputNotFound, ['path' => $this->projectRoot]);
         }
         $root = str_replace('\\', '/', $root);
 
         /** @var array<string, string> $values */
         $values = [];
         $dryRun = false;
+        $showDiff = false;
         $plan = null;
         for ($index = 0, $count = count($tokens); $index < $count; ++$index) {
             $token = $tokens[$index];
@@ -114,9 +185,13 @@ final readonly class ApplyCommand
                 $dryRun = true;
                 continue;
             }
+            if ($token === '--diff') {
+                $showDiff = true;
+                continue;
+            }
             if (!str_starts_with($token, '--')) {
                 if ($plan !== null) {
-                    throw new InvalidArgumentException('Unexpected argument for `agent-edit apply` (exactly one plan path is accepted): ' . $token);
+                    throw new InvalidInputFailure('Unexpected argument for `agent-edit apply` (exactly one plan path is accepted): ' . $token, FailureCode::Usage);
                 }
                 $plan = $token;
                 continue;
@@ -129,27 +204,31 @@ final readonly class ApplyCommand
                 $name = $raw;
                 $value = $tokens[$index + 1] ?? null;
                 if (!is_string($value) || str_starts_with($value, '--')) {
-                    throw new InvalidArgumentException('Missing value for option --' . $name);
+                    throw new InvalidInputFailure('Missing value for option --' . $name, FailureCode::Usage);
                 }
                 ++$index;
             }
-            if (!in_array($name, ['task', 'map-index', 'map-root', 'output-dir'], true)) {
-                throw new InvalidArgumentException('Unknown option --' . $name . ' for `agent-edit apply` (accepted: --task, --map-index, --map-root, --output-dir, --dry-run).');
+            if (!in_array($name, ['task', 'map-index', 'map-root', 'output-dir', 'format'], true)) {
+                throw new InvalidInputFailure('Unknown option --' . $name . ' for `agent-edit apply` (accepted: --task, --map-index, --map-root, --output-dir, --dry-run, --diff, --format).', FailureCode::Usage);
             }
             if ($value === '' || isset($values[$name])) {
-                throw new InvalidArgumentException('Invalid or duplicate option --' . $name);
+                throw new InvalidInputFailure('Invalid or duplicate option --' . $name, FailureCode::Usage);
             }
             $values[$name] = $value;
         }
 
+        $format = $values['format'] ?? 'text';
+        if (!in_array($format, ['text', 'json'], true)) {
+            throw new InvalidInputFailure('--format must be text or json.', FailureCode::Usage);
+        }
         if (!is_string($plan) || trim($plan) === '') {
-            throw new InvalidArgumentException('agent-edit apply requires exactly one plan JSON/TOON path (or `-` to read the plan from stdin).');
+            throw new InvalidInputFailure('agent-edit apply requires exactly one plan JSON/TOON path (or `-` to read the plan from stdin).', FailureCode::Usage);
         }
         $staged = null;
         if ($plan === '-') {
             $planBytes = $this->readStdin !== null ? ($this->readStdin)() : stream_get_contents(STDIN);
             if (!is_string($planBytes) || trim($planBytes) === '') {
-                throw new InvalidArgumentException('agent-edit apply - received an empty plan on stdin.');
+                throw new InvalidInputFailure('agent-edit apply - received an empty plan on stdin.', FailureCode::Usage);
             }
             $taskId = trim($values['task'] ?? '');
             $taskId = $taskId !== '' ? $taskId : 'plan-' . substr(hash('sha256', $planBytes), 0, 12);
@@ -200,12 +279,14 @@ final readonly class ApplyCommand
             'map_root' => $mapRoot,
             'output_directory' => $output,
             'dry_run' => $dryRun,
+            'show_diff' => $showDiff,
+            'format' => $format,
             'staged' => $staged,
         ];
     }
 
-    /** Tells the author which files the edit touched and exactly how to check or reverse it. */
-    private function printDirectEditNextSteps(string $receiptPath, string $bundleDirectory, string $status): void
+    /** @return list<string> project-relative paths a direct edit recorded in its receipt */
+    private function directEditPaths(string $receiptPath): array
     {
         $raw = @file_get_contents($receiptPath);
         $receipt = is_string($raw) ? json_decode($raw, true) : null;
@@ -216,6 +297,14 @@ final readonly class ApplyCommand
                 $paths[] = $file['path'];
             }
         }
+
+        return $paths;
+    }
+
+    /** Tells the author which files the edit touched and exactly how to check or reverse it. */
+    private function printDirectEditNextSteps(string $receiptPath, string $bundleDirectory, string $status): void
+    {
+        $paths = $this->directEditPaths($receiptPath);
         $root = realpath($this->projectRoot);
         $root = is_string($root) ? rtrim(str_replace('\\', '/', $root), '/') . '/' : '';
         $bundle = str_replace('\\', '/', $bundleDirectory);
@@ -233,7 +322,7 @@ final readonly class ApplyCommand
     private function assertLabel(string $taskId): void
     {
         if (preg_match('/\A[A-Za-z0-9][A-Za-z0-9._-]*\z/', $taskId) !== 1 || str_contains($taskId, '..')) {
-            throw new InvalidArgumentException('agent-edit apply requires a valid --task label.');
+            throw new InvalidInputFailure('agent-edit apply requires a valid --task label.', FailureCode::Usage);
         }
     }
 
@@ -241,7 +330,7 @@ final readonly class ApplyCommand
     {
         // `verify` only accepts bundles inside the project root, so a receipt written elsewhere could never be verified.
         if (str_contains('/' . $output . '/', '/../') || ($output !== $root && !str_starts_with($output, rtrim($root, '/') . '/'))) {
-            throw new InvalidArgumentException('--output-dir must stay inside the project root: ' . $output);
+            throw new InvalidInputFailure('--output-dir must stay inside the project root: ' . $output, FailureCode::Usage);
         }
     }
 
@@ -269,7 +358,7 @@ final readonly class ApplyCommand
         $resolved = $this->resolvePath($root, $path);
         $real = realpath($resolved);
         if (!is_string($real) || !is_file($real)) {
-            throw new InvalidArgumentException('Refactor ' . $label . ' not found: ' . $path);
+            throw new InvalidInputFailure((str_starts_with($label, 'refactor ') ? ucfirst($label) : 'Refactor ' . $label) . ' not found: ' . $path, FailureCode::InputNotFound, ['path' => $path]);
         }
 
         return str_replace('\\', '/', $real);
@@ -281,7 +370,7 @@ final readonly class ApplyCommand
         $resolved = $this->resolvePath($root, $path);
         $real = realpath($resolved);
         if (!is_string($real) || !is_dir($real)) {
-            throw new InvalidArgumentException('Refactor ' . $label . ' not found: ' . $path);
+            throw new InvalidInputFailure((str_starts_with($label, 'refactor ') ? ucfirst($label) : 'Refactor ' . $label) . ' not found: ' . $path, FailureCode::InputNotFound, ['path' => $path]);
         }
 
         return str_replace('\\', '/', $real);
@@ -292,7 +381,7 @@ final readonly class ApplyCommand
     {
         $path = trim($path);
         if ($path === '') {
-            throw new InvalidArgumentException('Refactor path must not be empty.');
+            throw new InvalidInputFailure('Refactor path must not be empty.', FailureCode::Usage);
         }
         $path = str_replace('\\', '/', $path);
         if (str_starts_with($path, '/') || preg_match('~^[A-Za-z]:/~', $path) === 1) {
@@ -319,7 +408,10 @@ Options:
   --map-index PATH     Current agent-map JSON/TOON. Default: .agent-map/php-symbols.json (not needed for source_edit_plan)
   --map-root PATH      Runtime source root for hash/currentness checks. Default: project root.
   --output-dir PATH    Receipt bundle. Default: .agent-edit/receipts/<label>
-  --dry-run            Validate the complete plan and current source without mutation.
+  --dry-run            Validate the complete plan and current source without mutation; lists the files it would change.
+  --diff               With --dry-run: also print the unified diff of every change it would make.
+  --format=text|json   json prints exactly one document on stdout, also for a failure (error.code, error.next_action,
+                       error.hint, error.details). Exit codes are the same in both formats.
 
 Every source hash, inclusive
 byte range, expected token and plan provenance is revalidated under the project mutation lock.

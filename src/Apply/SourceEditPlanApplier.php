@@ -6,6 +6,8 @@ namespace voku\AgentEdit\Apply;
 
 use Closure;
 use RuntimeException;
+use voku\AgentEdit\Failure\EditFailure;
+use voku\AgentEdit\Failure\FailureCode;
 use voku\AgentEdit\Plan\SourceEdit;
 use voku\AgentEdit\Plan\SourceEditPlanDocument;
 
@@ -114,7 +116,7 @@ final readonly class SourceEditPlanApplier implements MaplessPlanApplier
             $path = $this->existingFile($realRoot, $edit->path, $position);
             $content = $original[$path] ??= $this->read($path, $edit->path);
             if ($edit->expectedSourceSha256 !== null && !hash_equals($edit->expectedSourceSha256, 'sha256:' . hash('sha256', $content))) {
-                throw new RuntimeException(sprintf('edits[%d]: %s changed since you read it (expected_source_sha256 no longer matches). Re-read the file and rebuild the edit.', $position, $edit->path));
+                throw new EditFailure(sprintf('edits[%d]: %s changed since you read it (expected_source_sha256 no longer matches). Re-read the file and rebuild the edit.', $position, $edit->path), FailureCode::AnchorMissing, ['path' => $edit->path, 'edit' => $position]);
             }
             foreach ($this->resolve($edit, $content, $position) as $range) {
                 $byFile[$path][] = $range;
@@ -133,11 +135,11 @@ final readonly class SourceEditPlanApplier implements MaplessPlanApplier
             $cursor = 0;
             foreach ($ranges as [$start, $end, $replacement]) {
                 if ($start < $cursor) {
-                    throw new RuntimeException(sprintf(
+                    throw new EditFailure(sprintf(
                         'Two edits overlap in %s (around line %d). Merge them into one edit or anchor them on disjoint text.',
                         $this->relative($realRoot, $path),
                         AnchorHint::line($before, $start),
-                    ));
+                    ), FailureCode::EditsOverlap, ['path' => $this->relative($realRoot, $path), 'line' => AnchorHint::line($before, $start)]);
                 }
                 $after .= substr($before, $cursor, $start - $cursor) . $replacement;
                 $cursor = $end;
@@ -148,7 +150,7 @@ final readonly class SourceEditPlanApplier implements MaplessPlanApplier
                 $changes = $guard->changes($before, $after);
                 if ($changes !== []) {
                     if (!$plan->allowSignatureChange) {
-                        throw new RuntimeException($this->apiChangeRefusal($this->relative($realRoot, $path), $changes));
+                        throw new EditFailure($this->apiChangeRefusal($this->relative($realRoot, $path), $changes), FailureCode::ApiChangeRefused, ['path' => $this->relative($realRoot, $path), 'changes' => $changes]);
                     }
                     foreach ($changes as $change) {
                         $acknowledged[] = $this->relative($realRoot, $path) . ': ' . $change;
@@ -171,7 +173,7 @@ final readonly class SourceEditPlanApplier implements MaplessPlanApplier
         foreach ($plan->creates as $create) {
             $absolute = $realRoot . '/' . $create->path;
             if (file_exists($absolute) || is_link($absolute)) {
-                throw new RuntimeException('creates: ' . $create->path . ' already exists. Use an edit to change it, or pick another path.');
+                throw new EditFailure('creates: ' . $create->path . ' already exists. Use an edit to change it, or pick another path.', FailureCode::TargetExists, ['path' => $create->path]);
             }
             $operations[] = FileOperation::write($absolute, $create->content, null);
             $files[] = [
@@ -210,18 +212,18 @@ final readonly class SourceEditPlanApplier implements MaplessPlanApplier
     {
         $offsets = AnchorHint::offsets($content, $edit->find);
         if ($offsets === []) {
-            throw new RuntimeException(sprintf('edits[%d]: %s', $position, AnchorHint::missing($edit->path, $content, $edit->find)));
+            throw new EditFailure(sprintf('edits[%d]: %s', $position, AnchorHint::missing($edit->path, $content, $edit->find)), FailureCode::AnchorMissing, ['path' => $edit->path, 'edit' => $position]);
         }
 
         if ($edit->all) {
             $selected = $offsets;
         } elseif ($edit->occurrence !== null) {
             if ($edit->occurrence > count($offsets)) {
-                throw new RuntimeException(sprintf('edits[%d]: occurrence %d requested but `find` occurs only %d time(s) in %s.', $position, $edit->occurrence, count($offsets), $edit->path));
+                throw new EditFailure(sprintf('edits[%d]: occurrence %d requested but `find` occurs only %d time(s) in %s.', $position, $edit->occurrence, count($offsets), $edit->path), FailureCode::AnchorMissing, ['path' => $edit->path, 'edit' => $position]);
             }
             $selected = [$offsets[$edit->occurrence - 1]];
         } elseif (count($offsets) > 1) {
-            throw new RuntimeException(sprintf('edits[%d]: %s', $position, AnchorHint::ambiguous($edit->path, $content, $edit->find, $offsets)));
+            throw new EditFailure(sprintf('edits[%d]: %s', $position, AnchorHint::ambiguous($edit->path, $content, $edit->find, $offsets)), FailureCode::AnchorAmbiguous, ['path' => $edit->path, 'edit' => $position, 'matches' => count($offsets)]);
         } else {
             $selected = $offsets;
         }
@@ -236,7 +238,7 @@ final readonly class SourceEditPlanApplier implements MaplessPlanApplier
     {
         $path = $realRoot . '/' . $relative;
         if (is_link($path) || !is_file($path)) {
-            throw new RuntimeException(sprintf('edits[%d]: %s does not exist as a regular file. To add a new file use "creates".', $position, $relative));
+            throw new EditFailure(sprintf('edits[%d]: %s does not exist as a regular file. To add a new file use "creates".', $position, $relative), FailureCode::InputNotFound, ['path' => $relative]);
         }
         $real = realpath($path);
         if (!is_string($real) || !str_starts_with(str_replace('\\', '/', $real), $realRoot . '/')) {

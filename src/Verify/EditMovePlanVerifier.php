@@ -84,7 +84,7 @@ final readonly class EditMovePlanVerifier implements BundleVerifier
             throw new EditFailure('Current agent-map evidence is stale after refactor execution.', FailureCode::EvidenceStale);
         }
         if ($document->requiresPhpStan() && !str_ends_with($map->backend, '+phpstan')) {
-            throw new RuntimeException('Current refactor verification requires a PHPStan-backed map for this plan contract.');
+            throw new EditFailure('Current refactor verification requires a PHPStan-backed map for this plan contract.', FailureCode::MapBackendUnsupported);
         }
 
         $viaManifest = ($execution['changed_files_source'] ?? null) === MapManifestEvidence::SOURCE;

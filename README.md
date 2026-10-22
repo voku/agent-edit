@@ -62,6 +62,38 @@ Direct edits and Map plans are complementary, not interchangeable:
 | Rename, move or remove a class/method/property/constant | the matching `agent-map` plan, then `apply` |
 | Signature change whose callers you checked yourself | `source_edit_plan` with `allow_signature_change` |
 
+## Using it from an agent
+
+`--format=json` makes every `apply`, `edit` and `verify` call one parseable document on stdout (a failure included; nothing is split onto stderr) with the same exit codes as text mode. A dry run shows what would change before anything is written:
+
+```bash
+vendor/bin/agent-edit apply plan.json --dry-run --diff --format=json   # planned_changes + unified diff, no source written
+vendor/bin/agent-edit edit src/Calc.php --find='a - b' --replace='a + b' --dry-run --diff
+vendor/bin/agent-edit apply plan.json --task T1 --format=json          # changed_files + next_action
+```
+
+A failure looks like this, and `error.code` is stable:
+
+```json
+{"schema_version": "1.0", "command": "apply", "ok": false,
+ "error": {"code": "anchor_ambiguous", "message": "edits[0]: `find` occurs 2 times in src/Calc.php ...",
+           "next_action": "disambiguate_anchor", "hint": "Nothing was changed. `find` matches more than once; ...",
+           "details": {"path": "src/Calc.php", "edit": 0, "matches": 2}}}
+```
+
+| `error.code` | meaning | `next_action` |
+| --- | --- | --- |
+| `usage`, `input_not_found` | bad command line, missing file | `fix_arguments`, `provide_input` |
+| `plan_malformed`, `plan_unsupported`, `plan_refused` | the plan breaks its contract, is not executable, or is blocked/unsafe | `replan` |
+| `evidence_stale`, `evidence_changed` | the Map or the source moved since the plan was made | `refresh_map_and_replan` |
+| `map_backend_unsupported` | the plan needs a PHPStan-backed Map | `rebuild_map_with_phpstan` |
+| `anchor_missing`, `anchor_ambiguous`, `edits_overlap` | a direct edit's text is absent, matches twice, or two edits touch the same text | `reread_and_retry`, `disambiguate_anchor`, `merge_edits` |
+| `api_change_refused` | a direct edit would change a public declaration | `use_map_plan_or_acknowledge` |
+| `target_exists` | a file to create already exists | `edit_existing_file` |
+| `apply_failed`, `failed` | rolled back / not classified | `inspect_working_tree`, `report` |
+
+`next_action` names the only recovery that is legal for that cause; it carries no authority, a caller still decides. A cause that is not classified is reported as `failed`/`report`, never guessed from the message. A dry run still writes a `prepared` receipt bundle (so a host can see the attempt); it never writes source, and its diff is printed, not persisted.
+
 ## Capabilities
 
 ```bash

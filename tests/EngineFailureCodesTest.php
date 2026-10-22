@@ -69,10 +69,10 @@ final class EngineFailureCodesTest extends TestCase
 
     public function testAnUnsupportedPlanTypeNamesWhatItSawAndWhatIsSupported(): void
     {
-        $failure = $this->assertFailure(fn () => $this->dryRun(['type' => 'method_copy_plan', 'contract_version' => '1.0']), FailureCode::PlanUnsupported);
+        $failure = $this->assertFailure(fn () => $this->dryRun(['type' => 'interface_extract_plan', 'contract_version' => '1.0']), FailureCode::PlanUnsupported);
 
-        self::assertSame(['plan_type' => 'method_copy_plan', 'contract_version' => '1.0'], $failure->details());
-        self::assertStringContainsString('got method_copy_plan@1.0', $failure->getMessage());
+        self::assertSame(['plan_type' => 'interface_extract_plan', 'contract_version' => '1.0'], $failure->details());
+        self::assertStringContainsString('got interface_extract_plan@1.0', $failure->getMessage());
         self::assertInstanceOf(\InvalidArgumentException::class, $failure, 'the historical exception type is kept for existing catch blocks');
     }
 

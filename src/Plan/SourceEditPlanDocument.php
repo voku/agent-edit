@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace voku\AgentEdit\Plan;
 
 use RuntimeException;
+use voku\AgentEdit\Failure\EditFailure;
+use voku\AgentEdit\Failure\FailureCode;
 
 /**
  * Fail-closed wire envelope for the caller-authored `source_edit_plan@1.0`.
@@ -40,32 +42,32 @@ final readonly class SourceEditPlanDocument
     public static function fromArray(array $data): self
     {
         if (($data['type'] ?? null) !== self::TYPE) {
-            throw new RuntimeException('Unsupported plan type; expected source_edit_plan.');
+            throw new EditFailure('Unsupported plan type; expected source_edit_plan.', FailureCode::PlanUnsupported);
         }
         if (($data['contract_version'] ?? null) !== '1.0') {
-            throw new RuntimeException('Unsupported source_edit_plan contract version; expected "1.0".');
+            throw new EditFailure('Unsupported source_edit_plan contract version; expected "1.0".', FailureCode::PlanUnsupported);
         }
         self::rejectUnknownKeys($data, self::PLAN_KEYS, 'source_edit_plan');
 
         $targetId = $data['target_id'] ?? null;
         if (!is_string($targetId) || trim($targetId) === '' || strlen($targetId) > 200) {
-            throw new RuntimeException('source_edit_plan requires a non-empty target_id (a short label for what this edit is for, max 200 bytes).');
+            throw new EditFailure('source_edit_plan requires a non-empty target_id (a short label for what this edit is for, max 200 bytes).', FailureCode::PlanMalformed);
         }
         $allow = $data['allow_signature_change'] ?? false;
         if (!is_bool($allow)) {
-            throw new RuntimeException('source_edit_plan allow_signature_change must be a boolean.');
+            throw new EditFailure('source_edit_plan allow_signature_change must be a boolean.', FailureCode::PlanMalformed);
         }
 
         $rawEdits = $data['edits'] ?? [];
         $rawCreates = $data['creates'] ?? [];
         if (!is_array($rawEdits) || !array_is_list($rawEdits) || !is_array($rawCreates) || !array_is_list($rawCreates)) {
-            throw new RuntimeException('source_edit_plan edits and creates must be lists.');
+            throw new EditFailure('source_edit_plan edits and creates must be lists.', FailureCode::PlanMalformed);
         }
         if ($rawEdits === [] && $rawCreates === []) {
-            throw new RuntimeException('source_edit_plan needs at least one edit or one create.');
+            throw new EditFailure('source_edit_plan needs at least one edit or one create.', FailureCode::PlanMalformed);
         }
         if (count($rawEdits) > self::MAX_EDITS || count($rawCreates) > self::MAX_CREATES) {
-            throw new RuntimeException(sprintf('source_edit_plan is limited to %d edits and %d creates; split it.', self::MAX_EDITS, self::MAX_CREATES));
+            throw new EditFailure(sprintf('source_edit_plan is limited to %d edits and %d creates; split it.', self::MAX_EDITS, self::MAX_CREATES), FailureCode::PlanMalformed);
         }
 
         $edits = [];
@@ -81,10 +83,10 @@ final readonly class SourceEditPlanDocument
         foreach ($rawCreates as $position => $raw) {
             $create = self::create($raw, $position);
             if (isset($created[$create->path])) {
-                throw new RuntimeException('source_edit_plan creates ' . $create->path . ' more than once.');
+                throw new EditFailure('source_edit_plan creates ' . $create->path . ' more than once.', FailureCode::PlanMalformed);
             }
             if (isset($editedPaths[$create->path])) {
-                throw new RuntimeException('source_edit_plan both edits and creates ' . $create->path . '; a file cannot be both.');
+                throw new EditFailure('source_edit_plan both edits and creates ' . $create->path . '; a file cannot be both.', FailureCode::PlanMalformed);
             }
             $created[$create->path] = true;
             $creates[] = $create;
@@ -146,40 +148,40 @@ final readonly class SourceEditPlanDocument
     {
         $where = 'source_edit_plan edits[' . $position . ']';
         if (!is_array($raw)) {
-            throw new RuntimeException($where . ' must be an object.');
+            throw new EditFailure($where . ' must be an object.', FailureCode::PlanMalformed);
         }
         self::rejectUnknownKeys($raw, self::EDIT_KEYS, $where);
 
         $find = $raw['find'] ?? null;
         $replace = $raw['replace'] ?? null;
         if (!is_string($find) || $find === '') {
-            throw new RuntimeException($where . ' requires a non-empty string find (the exact text to replace).');
+            throw new EditFailure($where . ' requires a non-empty string find (the exact text to replace).', FailureCode::PlanMalformed);
         }
         if (!is_string($replace)) {
-            throw new RuntimeException($where . ' requires a string replace (use "" to delete the match).');
+            throw new EditFailure($where . ' requires a string replace (use "" to delete the match).', FailureCode::PlanMalformed);
         }
         if ($find === $replace) {
-            throw new RuntimeException($where . ' replaces text with itself; remove the no-op edit.');
+            throw new EditFailure($where . ' replaces text with itself; remove the no-op edit.', FailureCode::PlanMalformed);
         }
         if (str_contains($find, "\0") || str_contains($replace, "\0")) {
-            throw new RuntimeException($where . ' contains a NUL byte; binary edits are not supported.');
+            throw new EditFailure($where . ' contains a NUL byte; binary edits are not supported.', FailureCode::PlanMalformed);
         }
 
         $occurrence = $raw['occurrence'] ?? null;
         $all = $raw['all'] ?? false;
         if ($occurrence !== null && (!is_int($occurrence) || $occurrence < 1)) {
-            throw new RuntimeException($where . ' occurrence must be an integer >= 1 (1-based).');
+            throw new EditFailure($where . ' occurrence must be an integer >= 1 (1-based).', FailureCode::PlanMalformed);
         }
         if (!is_bool($all)) {
-            throw new RuntimeException($where . ' all must be a boolean.');
+            throw new EditFailure($where . ' all must be a boolean.', FailureCode::PlanMalformed);
         }
         if ($occurrence !== null && $all) {
-            throw new RuntimeException($where . ' sets both occurrence and all; choose one.');
+            throw new EditFailure($where . ' sets both occurrence and all; choose one.', FailureCode::PlanMalformed);
         }
 
         $sha = $raw['expected_source_sha256'] ?? null;
         if ($sha !== null && (!is_string($sha) || preg_match('/\Asha256:[a-f0-9]{64}\z/D', $sha) !== 1)) {
-            throw new RuntimeException($where . ' expected_source_sha256 must look like sha256:<64 hex>.');
+            throw new EditFailure($where . ' expected_source_sha256 must look like sha256:<64 hex>.', FailureCode::PlanMalformed);
         }
 
         return new SourceEdit(self::path($raw['path'] ?? null, $where), $find, $replace, $occurrence, $all, $sha);
@@ -189,15 +191,15 @@ final readonly class SourceEditPlanDocument
     {
         $where = 'source_edit_plan creates[' . $position . ']';
         if (!is_array($raw)) {
-            throw new RuntimeException($where . ' must be an object.');
+            throw new EditFailure($where . ' must be an object.', FailureCode::PlanMalformed);
         }
         self::rejectUnknownKeys($raw, self::CREATE_KEYS, $where);
         $content = $raw['content'] ?? null;
         if (!is_string($content)) {
-            throw new RuntimeException($where . ' requires a string content.');
+            throw new EditFailure($where . ' requires a string content.', FailureCode::PlanMalformed);
         }
         if (str_contains($content, "\0")) {
-            throw new RuntimeException($where . ' contains a NUL byte; binary files are not supported.');
+            throw new EditFailure($where . ' contains a NUL byte; binary files are not supported.', FailureCode::PlanMalformed);
         }
 
         return new SourceCreate(self::path($raw['path'] ?? null, $where), $content);
@@ -206,20 +208,20 @@ final readonly class SourceEditPlanDocument
     private static function path(mixed $value, string $where): string
     {
         if (!is_string($value) || $value === '' || str_contains($value, "\0")) {
-            throw new RuntimeException($where . ' requires a non-empty string path.');
+            throw new EditFailure($where . ' requires a non-empty string path.', FailureCode::PlanMalformed);
         }
         $path = str_replace('\\', '/', $value);
         if (str_starts_with($path, '/') || preg_match('~^[A-Za-z]:/~', $path) === 1) {
-            throw new RuntimeException($where . ' path must be relative to the project root: ' . $value);
+            throw new EditFailure($where . ' path must be relative to the project root: ' . $value, FailureCode::PlanMalformed);
         }
         $segments = explode('/', $path);
         foreach ($segments as $segment) {
             if ($segment === '' || $segment === '.' || $segment === '..') {
-                throw new RuntimeException($where . ' path is not a canonical relative path: ' . $value);
+                throw new EditFailure($where . ' path is not a canonical relative path: ' . $value, FailureCode::PlanMalformed);
             }
         }
         if (in_array($segments[0], ['.git', '.agent-edit'], true)) {
-            throw new RuntimeException($where . ' path points into ' . $segments[0] . '/, which direct edits never touch: ' . $value);
+            throw new EditFailure($where . ' path points into ' . $segments[0] . '/, which direct edits never touch: ' . $value, FailureCode::PlanMalformed);
         }
 
         return $path;
@@ -233,7 +235,7 @@ final readonly class SourceEditPlanDocument
     {
         $unknown = array_values(array_diff(array_map('strval', array_keys($data)), $accepted));
         if ($unknown !== []) {
-            throw new RuntimeException(sprintf('%s has unknown key(s) %s; accepted keys: %s.', $where, implode(', ', $unknown), implode(', ', $accepted)));
+            throw new EditFailure(sprintf('%s has unknown key(s) %s; accepted keys: %s.', $where, implode(', ', $unknown), implode(', ', $accepted)), FailureCode::PlanMalformed);
         }
     }
 }

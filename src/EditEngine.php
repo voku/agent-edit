@@ -313,10 +313,12 @@ final readonly class EditEngine
         $before = null;
         $after = null;
         $failure = null;
+        $preview = ['changes' => [], 'diff' => ''];
 
         if ($request->dryRun) {
             $before = $snapshotter->capture($request->repositoryRoot);
             $prepared = $applier->preflight($plan, $request->repositoryRoot);
+            $preview = ChangePreview::fromPreflight($prepared, $request->repositoryRoot);
             $result = new EditResult(
                 status: 'prepared',
                 exitCode: 0,
@@ -414,7 +416,7 @@ final readonly class EditEngine
                 ],
                 'changed_files' => $changedFiles,
                 'changed_files_source' => $before->available && $after->available ? 'git_status_diff' : 'unavailable',
-            ] + $direct));
+            ] + $direct + ($request->dryRun ? ['planned_changes' => $preview['changes']] : [])));
         } catch (Throwable $writeFailure) {
             if ($failure !== null) {
                 throw $failure;
@@ -433,6 +435,9 @@ final readonly class EditEngine
             $receiptPath,
             (string) ($plan['type'] ?? ''),
             (string) ($plan['target_id'] ?? ''),
+            $preview['changes'],
+            $preview['diff'],
+            $changedFiles,
         );
         if ($failure !== null) {
             throw $failure;

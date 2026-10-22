@@ -146,7 +146,7 @@ final class CliJsonTest extends TestCase
         $blocked['status'] = 'blocked';
         $blocked['blockers'] = ['called at src/X.php:1'];
         file_put_contents($this->root . '/blocked.json', json_encode($blocked, JSON_THROW_ON_ERROR));
-        file_put_contents($this->root . '/copy.json', json_encode(['type' => 'method_copy_plan', 'contract_version' => '1.0'], JSON_THROW_ON_ERROR));
+        file_put_contents($this->root . '/copy.json', json_encode(['type' => 'interface_extract_plan', 'contract_version' => '1.0'], JSON_THROW_ON_ERROR));
 
         $run = $this->subprocess($tokens);
         $exit = $run['exit'];

@@ -70,7 +70,7 @@ final readonly class MethodRemovalVerifier implements BundleVerifier
             throw new EditFailure('Current agent-map evidence is stale after method removal execution.', FailureCode::EvidenceStale);
         }
         if (!str_ends_with($map->backend, '+phpstan')) {
-            throw new RuntimeException('Method removal verification requires a PHPStan-backed current map.');
+            throw new EditFailure('Method removal verification requires a PHPStan-backed current map.', FailureCode::MapBackendUnsupported);
         }
 
         $viaManifest = ($execution['changed_files_source'] ?? null) === MapManifestEvidence::SOURCE;

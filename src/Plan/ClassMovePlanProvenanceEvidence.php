@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace voku\AgentEdit\Plan;
 
 use RuntimeException;
+use voku\AgentEdit\Failure\EditFailure;
+use voku\AgentEdit\Failure\FailureCode;
 use voku\AgentMap\Index\AgentMapIndex;
 use voku\AgentMap\Index\AnalysisFingerprint;
 
@@ -26,7 +28,7 @@ final readonly class ClassMovePlanProvenanceEvidence
         $backend = $data['backend'] ?? null;
         $fingerprint = $data['analysis_fingerprint'] ?? null;
         if (!is_string($mapDigest) || !preg_match('/\Asha256:[a-f0-9]{64}\z/D', $mapDigest)) {
-            throw new RuntimeException('Class move plan does not match the current map identity; rebuild and re-plan.');
+            throw new EditFailure('Class move plan does not match the current map identity; rebuild and re-plan.', FailureCode::PlanMalformed);
         }
         if (!is_string($backend) || $backend === '') {
             throw new RuntimeException('Class move plan provenance requires a backend.');
@@ -46,7 +48,7 @@ final readonly class ClassMovePlanProvenanceEvidence
             || $this->backend !== $map->backend
             || $this->analysisFingerprint->toArray() !== $map->fingerprint?->toArray()
         ) {
-            throw new RuntimeException('Class move plan does not match the current map identity; rebuild and re-plan.');
+            throw new EditFailure('Class move plan does not match the current map identity; rebuild and re-plan.', FailureCode::EvidenceStale);
         }
     }
 }
