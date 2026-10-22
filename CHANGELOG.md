@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Several `remove_symbol` edits of neighbouring declarations in one `source_edit_plan` failed with "Two edits overlap": each removal also takes the blank line it makes redundant, and for neighbours that is the same blank line. Removals that overlap or are separated by whitespace only are now applied one after the other and replaced by the one range that turns the file into that result, so a plan gives exactly the file that one plan per symbol gives (property-tested over every subset of the members of two class layouts, with no doubled blank line and none inside the braces). Removals around an untouched or separately edited member are unaffected.
 - Symbol edits (`replace_symbol`, `replace_body`, `insert_member`) changed the value of a multi-line string literal: re-indentation added the target indentation to every continuation line of a single-quoted, double-quoted or backtick string (`'a\nb'` became `'a\n    b'`) and the common-indent removal stripped characters from them, with no error. Lines that start inside such a string are now left verbatim and do not count towards the common indentation; heredoc and nowdoc bodies still move together with their closing marker, which PHP removes again. Found by applying a `source_edit_plan` to a real test file.
 
 ### Changed

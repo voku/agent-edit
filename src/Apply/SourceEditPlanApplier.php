@@ -116,6 +116,8 @@ final readonly class SourceEditPlanApplier implements MaplessPlanApplier
         $original = [];
         /** @var array<string, list<array{int, int, string}>> $byFile */
         $byFile = [];
+        /** @var array<string, list<array{range: array{int, int}, operation: array<string, mixed>}>> $removals the remove_symbol edits of each file */
+        $removals = [];
         foreach ($plan->edits as $position => $edit) {
             $path = $this->existingFile($realRoot, $edit->path, $position);
             $content = $original[$path] ??= $this->read($path, $edit->path);
@@ -124,6 +126,9 @@ final readonly class SourceEditPlanApplier implements MaplessPlanApplier
             }
             foreach ($this->resolve($edit, $content, $position) as $range) {
                 $byFile[$path][] = $range;
+                if (($edit->symbolOperation['op'] ?? null) === 'remove_symbol') {
+                    $removals[$path][] = ['range' => [$range[0], $range[1]], 'operation' => $edit->symbolOperation];
+                }
             }
         }
 
@@ -134,6 +139,8 @@ final readonly class SourceEditPlanApplier implements MaplessPlanApplier
         ksort($byFile, SORT_STRING);
         foreach ($byFile as $path => $ranges) {
             $before = $original[$path];
+            $edits = count($ranges);
+            $ranges = $this->mergeRemovals($before, $this->relative($realRoot, $path), $ranges, $removals[$path] ?? []);
             // A pure insertion at the offset where another edit starts goes first, so both can apply.
             usort($ranges, static fn (array $left, array $right): int => [$left[0], $left[1] - $left[0]] <=> [$right[0], $right[1] - $right[0]]);
             $after = '';
@@ -174,7 +181,7 @@ final readonly class SourceEditPlanApplier implements MaplessPlanApplier
                 'after_sha256' => hash('sha256', $after),
                 'before' => $before,
                 'after' => $after,
-                'edits' => count($ranges),
+                'edits' => $edits,
             ];
         }
 
@@ -247,6 +254,77 @@ final readonly class SourceEditPlanApplier implements MaplessPlanApplier
             static fn (int $offset): array => [$offset, $offset + strlen($edit->find), $edit->replace],
             $selected,
         );
+    }
+
+    /**
+     * Removing neighbouring declarations in one plan. Each `remove_symbol` range also takes the blank line it makes
+     * redundant, and for neighbours that is the same blank line (or the removals together leave one behind), so the
+     * ranges overlap or the result is not what removing the declarations one after the other gives. Removals that
+     * overlap or are separated by whitespace only are therefore applied one after the other and replaced by the one
+     * range that turns the file as read into that result. Other edits keep their own ranges.
+     *
+     * @param list<array{int, int, string}> $ranges
+     * @param list<array{range: array{int, int}, operation: array<string, mixed>}> $removals
+     * @return list<array{int, int, string}>
+     */
+    private function mergeRemovals(string $before, string $path, array $ranges, array $removals): array
+    {
+        if (count($removals) < 2) {
+            return $ranges;
+        }
+
+        usort($removals, static fn (array $left, array $right): int => $left['range'] <=> $right['range']);
+        /** @var list<list<array{range: array{int, int}, operation: array<string, mixed>}>> $clusters */
+        $clusters = [];
+        $clusterEnd = -1;
+        foreach ($removals as $removal) {
+            [$start, $end] = $removal['range'];
+            $last = count($clusters) - 1;
+            if ($last >= 0 && ($start < $clusterEnd || trim(substr($before, $clusterEnd, $start - $clusterEnd)) === '')) {
+                $clusters[$last][] = $removal;
+                $clusterEnd = max($clusterEnd, $end);
+                continue;
+            }
+            $clusters[] = [$removal];
+            $clusterEnd = $end;
+        }
+
+        $editor = new PhpSourceEditor();
+        foreach ($clusters as $cluster) {
+            if (count($cluster) < 2) {
+                continue;
+            }
+            $after = $before;
+            foreach (array_reverse($cluster) as $removal) {
+                try {
+                    $after = $editor->apply($after, $removal['operation'], $path)['content'];
+                } catch (SymbolEditException $exception) {
+                    throw new RuntimeException(sprintf('%s (%s): %s', $path, (string) $removal['operation']['op'], $exception->getMessage()), 0, $exception);
+                }
+            }
+
+            $keys = [];
+            foreach ($cluster as $removal) {
+                $keys[$removal['range'][0] . ':' . $removal['range'][1]] = true;
+            }
+            $ranges = array_values(array_filter(
+                $ranges,
+                static fn (array $range): bool => $range[2] !== '' || !isset($keys[$range[0] . ':' . $range[1]]),
+            ));
+
+            $limit = min(strlen($before), strlen($after));
+            $prefix = 0;
+            while ($prefix < $limit && $before[$prefix] === $after[$prefix]) {
+                ++$prefix;
+            }
+            $suffix = 0;
+            while ($suffix < $limit - $prefix && $before[strlen($before) - 1 - $suffix] === $after[strlen($after) - 1 - $suffix]) {
+                ++$suffix;
+            }
+            $ranges[] = [$prefix, strlen($before) - $suffix, substr($after, $prefix, strlen($after) - $prefix - $suffix)];
+        }
+
+        return $ranges;
     }
 
     /**
