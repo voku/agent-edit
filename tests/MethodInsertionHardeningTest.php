@@ -191,6 +191,40 @@ PHP);
         self::assertSame('passed', (new EditEngine())->verify($this->root, '.agent-edit/receipts/IMPORT', $this->root . '/map.json')['status']);
     }
 
+    public function testACrlfDestinationAcceptsAPlannerThatWritesCrlfAndStaysAllCrlf(): void
+    {
+        $this->write('src/Dest.php', str_replace("\n", "\r\n", self::DEST));
+        $plan = $this->copyPlan('Demo\\Src::needsImport');
+        // What an agent-map that follows the destination's line ending plans.
+        foreach ($plan['edits'] as $index => $edit) {
+            $plan['edits'][$index]['replacement'] = str_replace("\n", "\r\n", $edit['replacement']);
+        }
+
+        $this->apply($plan, label: 'CRLF');
+
+        $after = $this->read('src/Dest.php');
+        self::assertSame(substr_count($after, "\n"), substr_count($after, "\r\n"), 'no bare LF');
+        self::assertStringContainsString("use Demo\\Lib\\Helper;\r\n", $after);
+        self::assertSame(0, $this->lint('src/Dest.php'));
+    }
+
+    public function testAnImportWithADoubledOrStrayLineBreakIsStillRefused(): void
+    {
+        $this->write('src/Dest.php', str_replace("\n", "\r\n", self::DEST));
+        $plan = $this->copyPlan('Demo\\Src::needsImport');
+        foreach ($plan['edits'] as $index => $edit) {
+            $plan['edits'][$index]['replacement'] = str_replace("\n", "\r\n", $edit['replacement']);
+        }
+
+        foreach (["\r\r\n", "\r\n\r\n", "\n\r\n"] as $suffix) {
+            $forged = $plan;
+            $forged['edits'][0]['replacement'] = 'use Demo\\Lib\\Helper;' . $suffix;
+            $failure = $this->capturedOrFail(fn () => $this->apply($forged, dryRun: true, label: 'FORGED'), 'forged import ' . bin2hex($suffix));
+
+            self::assertStringContainsString('exactly one plain `use` statement', $failure->getMessage());
+        }
+    }
+
     public function testCopyOfAMethodWithAClosureInItsBodyIsNotMistakenForASecondMethod(): void
     {
         $this->apply($this->copyPlan('Demo\\Src::withClosure'), label: 'CLOSURE');
