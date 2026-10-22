@@ -142,6 +142,33 @@ final class TextLayoutTest extends TestCase
         self::assertSame("keep\n  this", self::evaluate($result));
     }
 
+    public function testAFlushLeftHeredocIsLeftWhereItIs(): void
+    {
+        $code = "    public function f(): string\n    {\n        return <<<'TXT'\n<?php\n  keep\nTXT;\n    }";
+
+        // Nothing to dedent and nothing to indent in the heredoc: its marker is at column 0.
+        self::assertSame(
+            "    public function f(): string\n    {\n        return <<<'TXT'\n<?php\n  keep\nTXT;\n    }",
+            TextLayout::reindent($code, '    ', "\n", true, '    '),
+        );
+        self::assertSame(
+            "public function f(): string\n{\n    return <<<'TXT'\n<?php\n  keep\nTXT;\n}",
+            TextLayout::reindent($code, '', "\n", true, '    '),
+            'the code around it is dedented, the heredoc is not',
+        );
+        self::assertSame("<?php\n  keep", self::evaluate("function f(): string\n{\n    return <<<'TXT'\n<?php\n  keep\nTXT;\n}"));
+    }
+
+    public function testAnIndentedHeredocMovesWithItsMarkerAsBefore(): void
+    {
+        $code = "    public function f(): string\n    {\n        return <<<TXT\n        a\n          b\n        TXT;\n    }";
+
+        self::assertSame(
+            "public function f(): string\n{\n    return <<<TXT\n    a\n      b\n    TXT;\n}",
+            TextLayout::reindent($code, '', "\n", true),
+        );
+    }
+
     public function testLineBreaksInsideAStringFollowTheFileLineEnding(): void
     {
         self::assertSame(

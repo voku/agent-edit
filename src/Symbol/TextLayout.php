@@ -92,7 +92,8 @@ final readonly class TextLayout
      *
      * A line that starts inside a quoted string literal is string content, not code layout: it is neither dedented nor
      * indented (and does not count towards the common indentation), so re-indenting never changes a value. Heredoc and
-     * nowdoc bodies are indented together with their closing marker, which PHP removes again.
+     * nowdoc bodies are indented together with their closing marker, which PHP removes again; when that marker is flush
+     * left the whole heredoc is left as it is.
      *
      * With `$unit` (one level of the target file's indentation, see {@see indentUnit()}) the code's own nesting is
      * written in that style too: code indented with four spaces lands as tabs in a tab-indented file instead of mixing
@@ -103,6 +104,15 @@ final readonly class TextLayout
         $normalized = str_replace(["\r\n", "\r"], "\n", $code);
         $lines = explode("\n", $normalized);
         [$modes, $markers] = self::lineModes($normalized);
+        foreach ($markers as $bodyLine => $markerLine) {
+            // A heredoc whose closing marker is flush left has nothing to remove from its body, so it is not part of
+            // the code's layout: it stays exactly where and as it is (it neither counts towards the common
+            // indentation nor receives the target indentation).
+            if (($lines[$markerLine][0] ?? '') !== ' ' && ($lines[$markerLine][0] ?? '') !== "\t") {
+                $modes[$bodyLine] = self::STRING;
+            }
+        }
+        $modes = array_values($modes);
 
         $skipped = 0; // leading blank lines removed: `$markers` are indexed by the original lines
         while ($lines !== [] && trim($lines[0]) === '') {
