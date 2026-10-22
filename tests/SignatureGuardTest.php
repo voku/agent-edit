@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace voku\AgentEdit\Tests;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use voku\AgentEdit\Apply\SignatureGuard;
 
@@ -210,7 +211,7 @@ PHP;
         $declarations = (array) (new SignatureGuard())->declarations($source);
 
         self::assertSame(
-            ['class:Demo\Level', 'method:Demo\Level::label', 'class:Demo\Helps', 'method:Demo\Helps::need'],
+            ['class:Demo\Level', 'method:Demo\Level::label', 'class:Demo\Helps', 'method:Demo\Helps::need', 'case:Demo\Level::Low'],
             array_keys($declarations),
         );
         self::assertSame('abstract public function need ( ) : int', $declarations['method:Demo\Helps::need'] ?? null);
@@ -317,5 +318,76 @@ PHP;
         $after = "<?php\nnamespace Demo;\n";
 
         self::assertSame([], (new SignatureGuard())->changes($before, $after));
+    }
+
+    /** @return iterable<string, array{string, string, string}> */
+    public static function memberChanges(): iterable
+    {
+        $class = static fn (string $body, string $head = 'final class A'): string => "<?php\nnamespace D;\n$head\n{\n$body\n}\n";
+
+        yield 'public constant removed' => [$class("    public const X = 1;\n    public const Y = 2;"), $class('    public const Y = 2;'), 'constant `D\A::X` was removed or renamed'];
+        yield 'constant without visibility renamed' => [$class('    const X = 1;'), $class('    const Z = 1;'), 'constant `D\A::X` was removed or renamed'];
+        yield 'protected constant removed' => [$class('    protected const X = 1;'), $class(''), 'constant `D\A::X` was removed or renamed'];
+        yield 'one name of a multi constant removed' => [$class('    public const X = 1, Y = 2;'), $class('    public const X = 1;'), 'constant `D\A::Y` was removed or renamed'];
+        yield 'constant narrowed to private' => [$class('    public const X = 1;'), $class('    private const X = 1;'), 'constant `D\A::X` was removed or renamed'];
+        yield 'constant visibility widened' => [$class('    protected const X = 1;'), $class('    public const X = 1;'), 'constant `D\A::X` signature changed from `protected` to `public`'];
+        yield 'constant becomes final' => [$class('    public const X = 1;'), $class('    final public const X = 1;'), 'constant `D\A::X` signature changed from `public` to `public final`'];
+        yield 'constant type added' => [$class('    public const X = 1;'), $class('    public const int X = 1;'), 'constant `D\A::X` signature changed from `public` to `public int`'];
+        yield 'enum case removed' => [$class("    case One;\n    case Two;", 'enum A'), $class('    case Two;', 'enum A'), 'case `D\A::One` was removed or renamed'];
+        yield 'enum case renamed' => [$class('    case One;', 'enum A'), $class('    case Uno;', 'enum A'), 'case `D\A::One` was removed or renamed'];
+        yield 'backed enum value changed' => [$class("    case One = 'a';", 'enum A: string'), $class("    case One = 'b';", 'enum A: string'), "case `D\\A::One` signature changed from `= 'a'` to `= 'b'`"];
+        yield 'enum case gains a backing value' => [$class('    case One;', 'enum A'), $class('    case One = 1;', 'enum A'), 'case `D\A::One` signature changed from `case` to `= 1`'];
+        yield 'public property removed' => [$class('    public int $x = 1;'), $class(''), 'property `D\A::$x` was removed or renamed'];
+        yield 'untyped property without value removed' => [$class('    public $x;'), $class(''), 'property `D\A::$x` was removed or renamed'];
+        yield 'var property removed' => [$class('    var $x;'), $class(''), 'property `D\A::$x` was removed or renamed'];
+        yield 'one name of a multi property removed' => [$class('    public $a, $b;'), $class('    public $a;'), 'property `D\A::$b` was removed or renamed'];
+        yield 'property type changed' => [$class('    public int $x = 1;'), $class('    public string $x = "";'), 'property `D\A::$x` signature changed from `public int` to `public string`'];
+        yield 'property type removed' => [$class('    public ?int $x = null;'), $class('    public $x = null;'), 'property `D\A::$x` signature changed from `public ?int` to `public`'];
+        yield 'property becomes readonly' => [$class('    public int $x;'), $class('    public readonly int $x;'), 'property `D\A::$x` signature changed from `public int` to `public readonly int`'];
+        yield 'property becomes static' => [$class('    public int $x = 0;'), $class('    public static int $x = 0;'), 'property `D\A::$x` signature changed from `public int` to `public static int`'];
+        yield 'property narrowed to private' => [$class('    protected int $x = 0;'), $class('    private int $x = 0;'), 'property `D\A::$x` was removed or renamed'];
+        yield 'trait property removed' => [$class('    public int $x = 0;', 'trait T'), $class('', 'trait T'), 'property `D\T::$x` was removed or renamed'];
+        yield 'interface constant removed' => [$class('    public const X = 1;', 'interface I'), $class('', 'interface I'), 'constant `D\I::X` was removed or renamed'];
+        yield 'braced namespace owner' => ["<?php\nnamespace D {\n    class A\n    {\n        public \$x;\n    }\n}\n", "<?php\nnamespace D {\n    class A\n    {\n    }\n}\n", 'property `D\A::$x` was removed or renamed'];
+    }
+
+    #[DataProvider('memberChanges')]
+    public function testNonPrivateConstantsEnumCasesAndPropertiesAreApi(string $before, string $after, string $expected): void
+    {
+        self::assertSame([$expected], (new SignatureGuard())->changes($before, $after));
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function memberNonChanges(): iterable
+    {
+        $class = static fn (string $body, string $head = 'final class A'): string => "<?php\nnamespace D;\n$head\n{\n$body\n}\n";
+
+        yield 'private constant removed' => [$class('    private const X = 1;'), $class('')];
+        yield 'private property removed or renamed' => [$class('    private int $x = 0;'), $class('    private int $y = 0;')];
+        yield 'constant value changed' => [$class('    public const X = 1;'), $class('    public const X = 2 + 3;')];
+        yield 'property default changed' => [$class('    public int $x = 1;'), $class('    public int $x = 2;')];
+        yield 'constant and property added' => [$class(''), $class("    public const X = 1;\n    public int \$x = 0;")];
+        yield 'enum case added' => [$class('    case One;', 'enum A'), $class("    case One;\n    case Two;", 'enum A')];
+        yield 'reformatting' => [$class('    public  ?int   $x = 1;'), $class("    public\n        ?int\n        \$x = 1;")];
+        yield 'comments between modifiers and name' => [$class('    public int $x = 1;'), $class('    public /* c */ int $x = 1; // why')];
+        yield 'moved within the class' => [$class("    public int \$x = 1;\n    public const X = 1;"), $class("    public const X = 1;\n    public int \$x = 1;")];
+        yield 'anonymous class members' => [$class('    public function f(): object { return new class { public $x; public const Y = 1; }; }'), $class('    public function f(): object { return new class { }; }')];
+        yield 'promoted parameter body edit' => [$class('    public function __construct(public readonly int $x) { }'), $class('    public function __construct(public readonly int $x) { echo 1; }')];
+    }
+
+    #[DataProvider('memberNonChanges')]
+    public function testPrivateMembersValuesReformattingAndAdditionsAreNotApiChanges(string $before, string $after): void
+    {
+        self::assertSame([], (new SignatureGuard())->changes($before, $after));
+    }
+
+    public function testMemberDeclarationsAreKeyedByOwner(): void
+    {
+        $source = "<?php\nnamespace D;\nenum E: int\n{\n    case A = 1;\n    public const K = 2;\n}\nclass C\n{\n    public static ?int \$p;\n    private \$hidden;\n}\n";
+
+        self::assertSame(
+            ['class:D\E', 'class:D\C', 'case:D\E::A', 'constant:D\E::K', 'property:D\C::$p'],
+            array_keys((array) (new SignatureGuard())->declarations($source)),
+        );
     }
 }

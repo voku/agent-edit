@@ -5,14 +5,24 @@ declare(strict_types=1);
 namespace voku\AgentEdit\Apply;
 
 use ParseError;
+use PhpParser\Error as PhpParserError;
+use PhpParser\Modifiers;
+use PhpParser\Node;
+use PhpParser\Node\Stmt;
+use PhpParser\NodeFinder;
+use PhpParser\NodeTraverser;
+use PhpParser\NodeVisitor\NameResolver;
+use PhpParser\ParserFactory;
 
 /**
  * Deterministic answer to "does this edit change an API other files may depend on?".
  *
  * A direct edit carries no cross-file evidence (no callers, no blockers), so the one class of change that needs such
- * evidence is detected from the token stream instead: removing or renaming a class, function or non-private method,
- * or changing its signature. Bodies, private methods, properties and additions are never reported. A reported change
- * is not an error in the code, it is a change whose callers nobody has looked at yet.
+ * evidence is detected from the source instead: removing or renaming a class, function or non-private method, or
+ * changing its signature (token stream), and removing, renaming or changing the shape of a non-private class constant,
+ * enum case or property (parsed declarations: visibility, `static`, `readonly`, `final`, declared type, and the backing
+ * value of an enum case). Bodies, private members, constant and property values and additions are never reported. A
+ * reported change is not an error in the code, it is a change whose callers nobody has looked at yet.
  */
 final class SignatureGuard
 {
@@ -130,7 +140,84 @@ final class SignatureGuard
             $declarations[($inClassBody ? 'method:' : 'function:') . $owner . $name] = $signature;
         }
 
-        return $declarations;
+        $members = $this->memberDeclarations($source);
+        if ($members === null) {
+            return null;
+        }
+
+        return $declarations + $members;
+    }
+
+    /**
+     * The non-private class constants, enum cases and properties of every named class-like in `$source`, keyed
+     * `constant:Owner::NAME`, `case:Owner::NAME` and `property:Owner::$name`, with a normalized shape as value.
+     * Promoted constructor parameters are already part of the constructor signature. Null when the source does not
+     * parse, like the token pass.
+     *
+     * @return array<string, string>|null
+     */
+    private function memberDeclarations(string $source): ?array
+    {
+        try {
+            $statements = (new ParserFactory())->createForHostVersion()->parse($source) ?? [];
+            $traverser = new NodeTraverser(new NameResolver());
+            $statements = $traverser->traverse($statements);
+        } catch (PhpParserError) {
+            return null;
+        }
+
+        $members = [];
+        /** @var list<Stmt\ClassLike> $classes */
+        $classes = (new NodeFinder())->findInstanceOf($statements, Stmt\ClassLike::class);
+        foreach ($classes as $class) {
+            $owner = $class->namespacedName?->toString() ?? $class->name?->toString();
+            if ($owner === null) {
+                continue; // an anonymous class has no name other files could rely on
+            }
+            foreach ($class->stmts as $member) {
+                if ($member instanceof Stmt\ClassConst && !$member->isPrivate()) {
+                    $shape = $this->shape($member->flags, $member->type, $source);
+                    foreach ($member->consts as $const) {
+                        $members['constant:' . $owner . '::' . $const->name->toString()] = $shape;
+                    }
+                } elseif ($member instanceof Stmt\EnumCase) {
+                    $members['case:' . $owner . '::' . $member->name->toString()] = $member->expr === null ? 'case' : '= ' . $this->text($member->expr, $source);
+                } elseif ($member instanceof Stmt\Property && !$member->isPrivate()) {
+                    $shape = $this->shape($member->flags, $member->type, $source);
+                    foreach ($member->props as $property) {
+                        $members['property:' . $owner . '::$' . $property->name->toString()] = $shape;
+                    }
+                }
+            }
+        }
+
+        return $members;
+    }
+
+    /** Visibility, `static`, `readonly`, `final` and the declared type as one comparable string. */
+    private function shape(int $flags, ?Node $type, string $source): string
+    {
+        $parts = [];
+        $parts[] = ($flags & Modifiers::PROTECTED) !== 0 ? 'protected' : 'public';
+        foreach ([Modifiers::STATIC => 'static', Modifiers::READONLY => 'readonly', Modifiers::FINAL => 'final'] as $flag => $word) {
+            if (($flags & $flag) !== 0) {
+                $parts[] = $word;
+            }
+        }
+        if ($type !== null) {
+            $parts[] = $this->text($type, $source);
+        }
+
+        return implode(' ', $parts);
+    }
+
+    /** The source text of a node without whitespace, so reformatting is not a change. */
+    private function text(Node $node, string $source): string
+    {
+        $start = $node->getStartFilePos();
+        $end = $node->getEndFilePos();
+
+        return $start < 0 || $end < $start ? '' : (string) preg_replace('/\s+/', '', substr($source, $start, $end - $start + 1));
     }
 
     private function describe(string $key): string
