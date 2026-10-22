@@ -191,9 +191,10 @@ Read-only verification of one applied agent-edit receipt bundle (`execution.json
 observed changed-file evidence, binds the immutable plan, checks the refreshed Map and writes
 verification-result.json into the bundle.
 
-For method rename, class rename and method removal plans it also re-scans Markdown and Twig/Smarty/Blade files for the old
-symbol. Non-historical mentions that remain make an otherwise passed result `incomplete` (exit 3) until they are fixed, or
-accepted with a recorded reason via --accept-residue=REASON.
+For method rename, class rename, method removal and class removal plans it also re-scans Markdown and Twig/Smarty/Blade
+files for the old symbol. For method removal, method move, property removal and class constant removal plans it reports
+`use` imports the change left unused. Remaining non-historical mentions or orphaned imports make an otherwise passed
+result `incomplete` (exit 3) until they are fixed, or accepted with a recorded reason via --accept-residue=REASON.
 
 TXT;
     }

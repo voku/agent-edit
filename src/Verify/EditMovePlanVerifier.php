@@ -183,7 +183,7 @@ final readonly class EditMovePlanVerifier implements BundleVerifier
 
                 $expectedOccurrences[$edit->replacement] = ($expectedOccurrences[$edit->replacement] ?? 0) + 1;
                 $finalStart = max($searchCursor, $edit->startFilePos + $offsetDelta);
-                $found = strpos($content, $edit->replacement, $searchCursor);
+                $found = $this->findReplacement($content, $edit->replacement, $searchCursor);
                 if ($found === false) {
                     throw new RuntimeException(sprintf(
                         'Rewritten token is missing from refactor evidence in %s (expected %s near byte %d).',
@@ -196,7 +196,7 @@ final readonly class EditMovePlanVerifier implements BundleVerifier
                 $offsetDelta += strlen($edit->replacement) - $removedLength;
             }
             foreach ($expectedOccurrences as $replacement => $count) {
-                if (substr_count($content, (string) $replacement) < $count) {
+                if ($this->countReplacement($content, (string) $replacement) < $count) {
                     throw new RuntimeException(sprintf(
                         'Rewritten source contains fewer %s occurrences than the refactor plan applied in %s.',
                         (string) $replacement,
@@ -362,6 +362,37 @@ final readonly class EditMovePlanVerifier implements BundleVerifier
         }
 
         return implode('/', $segments);
+    }
+
+    /**
+     * Finds a rewritten token. An identifier-shaped replacement only counts as a whole identifier: `name` inside `$name`
+     * or `rename` is not the renamed method, and only a `$`-prefixed replacement may stand for a variable.
+     */
+    private function findReplacement(string $content, string $replacement, int $offset): int|false
+    {
+        $pattern = $this->identifierPattern($replacement);
+        if ($pattern === null) {
+            return strpos($content, $replacement, $offset);
+        }
+
+        return preg_match($pattern, $content, $matches, PREG_OFFSET_CAPTURE, $offset) === 1 ? $matches[0][1] : false;
+    }
+
+    private function countReplacement(string $content, string $replacement): int
+    {
+        $pattern = $this->identifierPattern($replacement);
+
+        return $pattern === null ? substr_count($content, $replacement) : (int) preg_match_all($pattern, $content);
+    }
+
+    private function identifierPattern(string $replacement): ?string
+    {
+        if (preg_match('/^\$?[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*$/', $replacement) !== 1) {
+            return null;
+        }
+        $before = $replacement[0] === '$' ? '(?<![A-Za-z0-9_\x80-\xff])' : '(?<![A-Za-z0-9_\x80-\xff$])';
+
+        return '/' . $before . preg_quote($replacement, '/') . '(?![A-Za-z0-9_\x80-\xff])/';
     }
 
 }

@@ -196,7 +196,7 @@ final class CliJsonTest extends TestCase
 
         self::assertSame(1, $run['exit']);
         self::assertSame('', $run['stdout']);
-        self::assertStringStartsWith('[ERROR] Refactor plan not found: nope.json', $run['stderr'], 'the doubled "refactor refactor" wording is gone');
+        self::assertStringStartsWith('[ERROR] Plan file not found: nope.json', $run['stderr'], 'the doubled "refactor refactor" wording is gone');
     }
 
     public function testVerifyJsonPassesThroughTheResultAndTheExitCode(): void

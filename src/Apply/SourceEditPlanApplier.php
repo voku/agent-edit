@@ -10,6 +10,10 @@ use voku\AgentEdit\Failure\EditFailure;
 use voku\AgentEdit\Failure\FailureCode;
 use voku\AgentEdit\Plan\SourceEdit;
 use voku\AgentEdit\Plan\SourceEditPlanDocument;
+use voku\AgentEdit\Symbol\PhpSourceEditor;
+use voku\AgentEdit\Symbol\SymbolEditException;
+use PhpParser\Error;
+use PhpParser\ParserFactory;
 
 /**
  * Applies a caller-authored `source_edit_plan` without a Map: anchors are resolved against the current bytes, the whole
@@ -130,7 +134,8 @@ final readonly class SourceEditPlanApplier implements MaplessPlanApplier
         ksort($byFile, SORT_STRING);
         foreach ($byFile as $path => $ranges) {
             $before = $original[$path];
-            usort($ranges, static fn (array $left, array $right): int => $left[0] <=> $right[0]);
+            // A pure insertion at the offset where another edit starts goes first, so both can apply.
+            usort($ranges, static fn (array $left, array $right): int => [$left[0], $left[1] - $left[0]] <=> [$right[0], $right[1] - $right[0]]);
             $after = '';
             $cursor = 0;
             foreach ($ranges as [$start, $end, $replacement]) {
@@ -147,6 +152,9 @@ final readonly class SourceEditPlanApplier implements MaplessPlanApplier
             $after .= substr($before, $cursor);
 
             if (str_ends_with(strtolower($path), '.php')) {
+                // Before the API guard (which cannot judge unparsable code) and before any staging, so a dry run
+                // reports a broken result with its line instead of `prepared`.
+                $this->assertParses($after, $this->relative($realRoot, $path));
                 $changes = $guard->changes($before, $after);
                 if ($changes !== []) {
                     if (!$plan->allowSignatureChange) {
@@ -187,6 +195,9 @@ final readonly class SourceEditPlanApplier implements MaplessPlanApplier
         }
 
         usort($files, static fn (array $left, array $right): int => strcmp($left['path'], $right['path']));
+        if ($operations === []) {
+            throw new RuntimeException('The plan changes nothing (every edit was already in place, for example an existing import); no file was touched.');
+        }
 
         return new SourceEditPreparation($operations, $files, count($plan->edits), count($plan->creates), $acknowledged);
     }
@@ -210,6 +221,10 @@ final readonly class SourceEditPlanApplier implements MaplessPlanApplier
     /** @return list<array{int, int, string}> start offset, end offset (exclusive), replacement */
     private function resolve(SourceEdit $edit, string $content, int $position): array
     {
+        if ($edit->symbolOperation !== null) {
+            return $this->resolveSymbol($edit->symbolOperation, $edit->path, $content, $position);
+        }
+
         $offsets = AnchorHint::offsets($content, $edit->find);
         if ($offsets === []) {
             throw new EditFailure(sprintf('edits[%d]: %s', $position, AnchorHint::missing($edit->path, $content, $edit->find)), FailureCode::AnchorMissing, ['path' => $edit->path, 'edit' => $position]);
@@ -232,6 +247,45 @@ final readonly class SourceEditPlanApplier implements MaplessPlanApplier
             static fn (int $offset): array => [$offset, $offset + strlen($edit->find), $edit->replace],
             $selected,
         );
+    }
+
+    /**
+     * Runs one symbol-addressed operation on the file as read and takes the one byte range it replaces (a pure
+     * insertion is a zero-length range), so it is checked for overlaps, guarded and published exactly like a
+     * `find` / `replace` edit.
+     *
+     * @param array<string, mixed> $operation
+     * @return list<array{int, int, string}>
+     */
+    private function resolveSymbol(array $operation, string $path, string $content, int $position): array
+    {
+        if (!str_ends_with(strtolower($path), '.php')) {
+            throw new RuntimeException(sprintf('edits[%d]: %s is not a .php file; symbol operations only edit PHP. Use find/replace.', $position, $path));
+        }
+        try {
+            $range = (new PhpSourceEditor())->apply($content, $operation, $path)['range'];
+        } catch (SymbolEditException $exception) {
+            throw new RuntimeException(sprintf('edits[%d] (%s): %s', $position, (string) $operation['op'], $exception->getMessage()), 0, $exception);
+        }
+
+        return $range === null ? [] : [$range];
+    }
+
+    private function assertParses(string $content, string $path): void
+    {
+        try {
+            (new ParserFactory())->createForHostVersion()->parse($content);
+        } catch (Error $error) {
+            $line = $error->getStartLine();
+            $lines = explode("\n", $content);
+            $text = $line > 0 && isset($lines[$line - 1]) ? trim($lines[$line - 1]) : '';
+            throw new RuntimeException(sprintf(
+                'Edited PHP failed syntax validation before publication in %s: %s%s. No file was changed.',
+                $path,
+                $error->getRawMessage(),
+                $line > 0 ? sprintf(' on line %d%s', $line, $text === '' ? '' : ' (`' . $text . '`)') : '',
+            ));
+        }
     }
 
     private function existingFile(string $realRoot, string $relative, int $position): string

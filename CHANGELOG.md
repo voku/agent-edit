@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `source_edit_plan@1.0`, a caller-authored direct-edit capability that needs no `agent-map` index: exact `find`/`replace` anchors (unique, `occurrence` or `all`), optional per-edit file digests and `creates` for new files. Refusals are actionable (match line numbers, whitespace/line-ending differences, closest line). Rewritten and created PHP is syntax-checked and published through the new generic `FileTransaction` (stage, lint, back up, publish, roll back). A token-level `SignatureGuard` refuses removing, renaming or changing the signature of a class, function or non-private method unless `allow_signature_change` is set, and records the acknowledgement.
 - `agent-edit edit FILE --find ... --replace ...` (one edit; `--find-file`/`--replace-file` for multi-line text), `agent-edit apply -` (plan on stdin), `agent-edit undo --bundle=PATH` and `agent-edit schema`. Direct-edit receipts bind per-file digests and pre-images; `undo` restores them only while every touched file still has the published digest. `verify` of a direct edit needs no Map.
 - `agent-edit capabilities` reports `requires_map`; `--with-map` lists Map-free capabilities under `direct` instead of `executable_not_planned`.
+- Symbol-addressed edits in `source_edit_plan`: `"op": "replace_symbol" | "replace_body" | "insert_member" | "remove_symbol" | "add_use"` name a declaration (`Class::method()`, `Class::$property`, `Class::CONSTANT`, `Enum::CASE`, `Class`, `function()`) instead of copying its text. Code is re-indented to its target and keeps the file's line ending; `replace_symbol` keeps an omitted doc comment or attribute list; `insert_member` places members at the start, end, `after` or `before` a member; `remove_symbol` leaves no doubled or dangling blank line; `add_use` inserts in sorted position and is a no-op for an existing import. Unknown or ambiguous symbols are refused with the declarations the file really has. Each symbol edit resolves against the file as read and is reduced to its smallest changed byte range, so the overlap check, API guard, syntax check, transaction, receipt and `undo` apply unchanged. The JSON schema lists every edit form as a `oneOf` variant.
 - `EditEngine::undo()`, `EditEngine::preflight()`/`apply()` accept a `null` Map for Map-free plans, `ApplyRequest::$mapIndexPath` may be `null` for them, and `EditResult` carries applier `evidence`.
 
 - `apply --dry-run` (and `edit --dry-run`) lists every file it would create, modify, move or delete with added/removed line counts; `--diff` prints the unified diff. The preview is derived only from the applier's own preflight result, and a test proves the previewed diff equals the diff of the real apply. `EditReceipt` gains `plannedChanges`, `diff` and `changedFiles`; a dry-run `execution.json` records `planned_changes` (never the diff).
@@ -26,11 +27,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- An unsupported plan names the type and contract version it saw; an unparsable plan names the file and the parser message instead of a bare `Syntax error`; "Refactor refactor plan not found" is now "Refactor plan not found".
+- An unsupported plan names the type and contract version it saw; an unparsable plan names the file and the parser message instead of a bare `Syntax error`.
 
 ### Fixed
 
+- A `source_edit_plan` whose result is not valid PHP is refused while the plan is prepared, with the parser message and the offending line, so `--dry-run` no longer reports `prepared` for it (previously only the publishing `php -l` caught it).
+- Rename and move verification matched a rewritten token as a substring: renaming `greet` to `name` was "verified" by the `name` inside `$name` after the call site was reverted, although the code then called an undefined method. Identifier-shaped replacements now only count as whole identifiers, and a bare name never as part of a `$variable`.
+- Re-running `apply` into a bundle that records an applied plan overwrote its receipt with `runner_failed` while the old `passed` verification result stayed. Such a bundle is now never overwritten (also not by a dry run); any other bundle drops a stale verification result before a new receipt is written. `undo` likewise removes the verification result of the state it restored.
 - Verifying an edit of a file Git ignores no longer fails with "changed_files do not match plan scope": ignored plan files are recorded at apply time, proven by digest and reported in `git_ignored_files_proven_by_digest_only`.
+- `apply --map-root` outside the project root was accepted, producing a bundle `verify` can never check; it is now refused before any write. An absolute `--output-dir` named through a symlinked directory (a shell's `$PWD`, macOS `/tmp`) is resolved before the inside-root check instead of being refused.
+- A missing plan file reported `Refactor refactor plan not found`; it now reads `Plan file not found` (and `Map index not found`, `Map root not found`).
+- The top-level help listed `verify` without `--accept-residue`, and `verify --help` omitted class removal plans and the `use` import residue check.
 
 ## 0.4.4 - 2026-10-09
 

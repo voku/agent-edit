@@ -365,7 +365,7 @@ final class DirectEditCliTest extends TestCase
         $result = $this->cli(['apply', 'plan.json']);
 
         self::assertSame(1, $result['exit']);
-        self::assertStringContainsString('map index not found', $result['stderr']);
+        self::assertStringContainsString('Map index not found', $result['stderr']);
     }
 
     public function testSchemaPrintsTheContractAndRejectsUnknownNames(): void
@@ -420,6 +420,12 @@ final class DirectEditCliTest extends TestCase
         $top = $this->cli(['help']);
         foreach (['agent-edit edit FILE', 'agent-edit undo --bundle=PATH', 'agent-edit schema', 'apply PLAN|-'] as $needle) {
             self::assertStringContainsString($needle, $top['stdout']);
+        }
+        self::assertStringContainsString('[--accept-residue=REASON]', $top['stdout']);
+
+        $verify = $this->cli(['verify', '--help']);
+        foreach (['class removal plans', 'imports the change left unused', '--accept-residue=REASON'] as $needle) {
+            self::assertStringContainsString($needle, str_replace("\n", ' ', $verify['stdout']));
         }
     }
 
