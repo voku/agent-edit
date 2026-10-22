@@ -10,8 +10,9 @@ use Throwable;
 
 /**
  * All-or-nothing publication of exact file contents: preconditions are proven, every new content is staged next to its
- * target and PHP-syntax-checked, originals are moved to backups, and any failure restores every file and removes every
- * created file and directory. It never decides *what* to write; callers hand it final bytes plus the digest each
+ * target and PHP-syntax-checked, originals are preserved as backups, and any failure restores every file and removes
+ * every created file and directory. A rewritten file is replaced by one atomic rename, so a concurrent reader always
+ * sees either its old or its new bytes, never a missing file. It never decides *what* to write; callers hand it final bytes plus the digest each
  * existing file must still have.
  */
 final readonly class FileTransaction
@@ -123,7 +124,7 @@ final readonly class FileTransaction
                 }
 
                 $backup = $this->temporaryPath($operation->path, 'backup');
-                if (!$this->move($operation->path, $backup)) {
+                if (!$this->preserve($operation->path, $backup)) {
                     throw new RuntimeException('Unable to back up file before publication: ' . $this->display($realRoot, $operation->path));
                 }
                 $backups[$operation->path] = $backup;
@@ -132,6 +133,10 @@ final readonly class FileTransaction
                     throw new RuntimeException('File changed during publication precondition capture: ' . $this->display($realRoot, $operation->path));
                 }
                 if ($operation->isDelete()) {
+                    if (!unlink($operation->path)) {
+                        throw new RuntimeException('Unable to delete file: ' . $this->display($realRoot, $operation->path));
+                    }
+                    $published[$operation->path] = true;
                     continue;
                 }
                 if (!$this->move($staged[$operation->path], $operation->path)) {
@@ -246,16 +251,21 @@ final readonly class FileTransaction
         $failures = [];
         foreach (array_reverse($operations) as $operation) {
             $path = $operation->path;
-            if (isset($published[$path]) && (is_file($path) || is_link($path)) && !unlink($path)) {
-                $failures[] = 'unable to remove published file ' . $path;
-            }
             $backup = $backups[$path] ?? null;
             if ($backup === null) {
+                if (isset($published[$path]) && (is_file($path) || is_link($path)) && !unlink($path)) {
+                    $failures[] = 'unable to remove published file ' . $path;
+                }
                 continue;
             }
-            if ((is_file($path) || is_link($path)) && !unlink($path)) {
-                $failures[] = 'unable to clear file before restore ' . $path;
+            if (!isset($published[$path])) {
+                // Never replaced: the path still holds the original. (Renaming a hard link onto its own file is a no-op.)
+                if ((is_file($backup) || is_link($backup)) && !unlink($backup)) {
+                    $failures[] = 'unable to remove backup of unchanged file ' . $path;
+                }
+                continue;
             }
+            // Renaming the backup over the rewritten (or deleted) path restores it atomically.
             if ((is_file($backup) || is_link($backup)) && !$this->move($backup, $path)) {
                 $failures[] = 'unable to restore backup of ' . $path;
             }
@@ -312,6 +322,17 @@ final readonly class FileTransaction
         }
 
         return $temporary;
+    }
+
+    /** Keeps the original in place: a hard link (same bytes, no copy) or, where links are unsupported, a copy. */
+    private function preserve(string $path, string $backup): bool
+    {
+        if (@link($path, $backup)) {
+            return true;
+        }
+        $permissions = fileperms($path);
+
+        return @copy($path, $backup) && is_int($permissions) && chmod($backup, $permissions & 0o777);
     }
 
     private function move(string $from, string $to): bool

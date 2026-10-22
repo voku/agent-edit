@@ -111,6 +111,37 @@ final class ResidueVerifyTest extends TestCase
         self::assertContains('README.md', array_column($result['residue']['references'], 'path'));
     }
 
+    public function testManyHistoricalMentionsNeitherHideNorFakeOpenResidue(): void
+    {
+        // Regression: the scanner lists at most 200 references in path order and `CHANGELOG.md` sorts first, so 250
+        // historical mentions filled the list: residue read `open: 0` yet stayed `open` because it was truncated.
+        unlink($this->root . '/README.md');
+        unlink($this->root . '/templates/page.html.twig');
+        file_put_contents($this->root . '/CHANGELOG.md', str_repeat("- changed `Demo\\Service`\n", 250));
+        $plan = ['type' => 'class_removal_plan', 'target_id' => 'class:Demo\\Service'];
+
+        $clear = (new ResidueCheck())->apply(['status' => 'passed'], $plan, $this->root, null);
+        self::assertSame('passed', $clear['status']);
+        self::assertSame(['clear', 0, 250, false], [$clear['residue']['status'], $clear['residue']['open'], $clear['residue']['historical'], $clear['residue']['truncated']]);
+
+        file_put_contents($this->root . '/templates/page.html.twig', "{{ constant('Demo\\\\Service::X') }}\n");
+        $open = (new ResidueCheck())->apply(['status' => 'passed'], $plan, $this->root, null);
+        self::assertSame('incomplete', $open['status']);
+        self::assertSame(['open', 1, 250], [$open['residue']['status'], $open['residue']['open'], $open['residue']['historical']]);
+        self::assertSame('templates/page.html.twig', $open['residue']['references'][0]['path']);
+    }
+
+    public function testTheListIsCappedButTheOpenCountIsNot(): void
+    {
+        file_put_contents($this->root . '/README.md', str_repeat("Use `Demo\\Service` here.\n", 60));
+
+        $result = (new ResidueCheck())->apply(['status' => 'passed'], ['type' => 'class_removal_plan', 'target_id' => 'class:Demo\\Service'], $this->root, null);
+
+        self::assertSame(60, $result['residue']['open']);
+        self::assertCount(50, $result['residue']['references']);
+        self::assertTrue($result['residue']['truncated']);
+    }
+
     public function testPlanTypesWithoutADeclaredSymbolPassThroughUnchanged(): void
     {
         $result = ['status' => 'passed', 'checks' => []];

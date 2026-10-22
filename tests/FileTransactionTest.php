@@ -121,13 +121,9 @@ final class FileTransactionTest extends TestCase
 
     public function testFailureWhilePublishingRestoresEveryFileAndRemovesCreatedOnes(): void
     {
-        $renames = 0;
+        // Fails publishing the last file, after the created file and src/A.php were already published.
         $transaction = new FileTransaction(
-            static function (string $from, string $to) use (&$renames): bool {
-                ++$renames;
-
-                return $renames === 5 ? false : rename($from, $to);
-            },
+            static fn (string $from, string $to): bool => str_ends_with($to, '/src/B.php') && str_contains($from, '-stage-') ? false : rename($from, $to),
         );
 
         try {
@@ -148,15 +144,33 @@ final class FileTransactionTest extends TestCase
         self::assertSame([], $this->leftovers());
     }
 
+    public function testARewrittenFileNeverDisappearsWhilePublishing(): void
+    {
+        // Regression: publication moved the original to its backup and only then moved the staged file in, so a
+        // concurrent reader (an unlocked `edit` preflight, an IDE, agent-map) could see the file missing in between.
+        $path = $this->root . '/src/A.php';
+        $observed = [];
+        $transaction = new FileTransaction(
+            static function (string $from, string $to) use ($path, &$observed): bool {
+                $observed[] = is_file($path);
+
+                return rename($from, $to);
+            },
+        );
+
+        $transaction->run([FileOperation::write($path, "<?php\n\nfinal class A2 {}\n", $this->hash('src/A.php'))], $this->root);
+
+        self::assertNotSame([], $observed);
+        self::assertNotContains(false, $observed, 'The rewritten file must exist at every publication step.');
+        self::assertStringContainsString('A2', (string) file_get_contents($path));
+        self::assertSame([], $this->leftovers());
+    }
+
     public function testFailedDeleteIsRolledBack(): void
     {
-        $renames = 0;
+        // Fails publishing src/A.php, after notes.txt was already deleted.
         $transaction = new FileTransaction(
-            static function (string $from, string $to) use (&$renames): bool {
-                ++$renames;
-
-                return $renames === 3 ? false : rename($from, $to);
-            },
+            static fn (string $from, string $to): bool => str_ends_with($to, '/src/A.php') && str_contains($from, '-stage-') ? false : rename($from, $to),
         );
 
         try {
