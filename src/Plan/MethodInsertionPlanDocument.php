@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace voku\AgentEdit\Plan;
 
+use PhpParser\Error;
+use PhpParser\Node\Stmt;
+use PhpParser\ParserFactory;
 use RuntimeException;
 use voku\AgentEdit\Failure\EditFailure;
 use voku\AgentEdit\Failure\FailureCode;
@@ -136,9 +139,14 @@ final readonly class MethodInsertionPlanDocument implements EditMovePlanEvidence
         if ($class === null) {
             throw new EditFailure('Destination class ' . $destination . ' is not declared in ' . $this->insertion->path . ' by the current Map; refresh the Map and re-plan.', FailureCode::EvidenceChanged, ['destination' => $destination, 'path' => $this->insertion->path]);
         }
-        if ($class->lineEnd < 1 || $class->lineEnd !== $this->insertion->lineStart) {
+        $source = @file_get_contents(rtrim($map->root, '/') . '/' . $this->insertion->path);
+        $declaration = is_string($source) ? self::declaration($source, $destination) : null;
+        if ($class->lineEnd < 1 || $class->lineEnd !== $this->insertion->lineStart
+            || $declaration === null || $declaration->getEndFilePos() !== $this->insertion->startFilePos
+        ) {
             throw new EditFailure('The insertion is not at the closing brace of ' . $destination . ' in the current Map; refresh the Map and re-plan.', FailureCode::EvidenceChanged, ['destination' => $destination]);
         }
+        $this->assertImportSlots((string) $source);
         foreach ($class->methods as $existing) {
             if (strcasecmp($existing->name, $method) === 0) {
                 throw new EditFailure($destination . ' already declares ' . $existing->name . '(); refusing to add a second declaration.', FailureCode::EvidenceChanged, ['destination' => $destination, 'method' => $existing->name]);
@@ -151,59 +159,101 @@ final readonly class MethodInsertionPlanDocument implements EditMovePlanEvidence
 
 
     /**
-     * Names (lower-cased) of the methods declared at class level by the text `replacement` would add before the closing
-     * brace, found with the PHP tokenizer so strings, comments and closures inside bodies are not mistaken for methods.
+     * Names (lower-cased) of the methods the text `replacement` adds before the closing brace it keeps. The text is parsed
+     * as the tail of a probe class: it must close exactly that class, add nothing after it, and add only methods to it.
      *
      * @return list<string>
      */
     private static function declaredMethods(string $replacement): array
     {
         try {
-            $tokens = token_get_all("<?php\nclass AgentEditProbe\n{\n" . $replacement . "\n", TOKEN_PARSE);
-        } catch (\ParseError $error) {
+            $statements = (new ParserFactory())->createForHostVersion()->parse("<?php\nclass AgentEditProbe\n{\n" . $replacement . "\n") ?? [];
+        } catch (Error $error) {
             throw new RuntimeException('Method insertion text does not parse as class members: ' . $error->getMessage(), 0, $error);
         }
+        if (count($statements) !== 1 || !$statements[0] instanceof Stmt\Class_) {
+            throw new RuntimeException('Method insertion text must add a method and nothing outside the destination class.');
+        }
         $names = [];
-        $depth = 0;
-        $parentheses = 0;
-        $count = count($tokens);
-        for ($index = 0; $index < $count; ++$index) {
-            $token = $tokens[$index];
-            if (is_string($token)) {
-                $depth += $token === '{' ? 1 : ($token === '}' ? -1 : 0);
-                $parentheses += $token === '(' ? 1 : ($token === ')' ? -1 : 0);
+        foreach ($statements[0]->stmts as $member) {
+            if ($member instanceof Stmt\Nop) {
                 continue;
             }
-            if ($token[0] === T_CURLY_OPEN || $token[0] === T_DOLLAR_OPEN_CURLY_BRACES) {
-                ++$depth;
-                continue;
-            }
-            if ($depth !== 1 || $parentheses !== 0) {
-                continue;
-            }
-            // Directly in the class body: a property, constant, enum case or trait use is a second member, not the method.
-            if (in_array($token[0], [T_VARIABLE, T_CONST, T_CASE, T_USE], true)) {
+            // A property, constant, enum case or trait use is a second member, not the method.
+            if (!$member instanceof Stmt\ClassMethod) {
                 throw new RuntimeException('Method insertion text must add a method and no other class member.');
             }
-            if ($token[0] !== T_FUNCTION) {
-                continue;
-            }
-            for ($next = $index + 1; $next < $count; ++$next) {
-                $candidate = $tokens[$next];
-                if (is_array($candidate) && in_array($candidate[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
-                    continue;
-                }
-                if ($candidate === '&') {
-                    continue;
-                }
-                if (is_array($candidate) && $candidate[0] === T_STRING) {
-                    $names[] = strtolower($candidate[1]);
-                }
-                break;
-            }
+            $names[] = strtolower($member->name->toString());
         }
 
         return $names;
+    }
+
+    /** The class-like statement declaring `$fqn` at file or namespace level, or null when there is none or the source does not parse. */
+    private static function declaration(string $source, string $fqn): ?Stmt\ClassLike
+    {
+        try {
+            $statements = (new ParserFactory())->createForHostVersion()->parse($source) ?? [];
+        } catch (Error) {
+            return null;
+        }
+        foreach ($statements as $statement) {
+            $namespace = $statement instanceof Stmt\Namespace_ ? ($statement->name?->toString() ?? '') : '';
+            foreach ($statement instanceof Stmt\Namespace_ ? $statement->stmts : [$statement] as $inner) {
+                if ($inner instanceof Stmt\ClassLike && $inner->name !== null
+                    && ltrim($namespace . '\\' . $inner->name->toString(), '\\') === $fqn
+                ) {
+                    return $inner;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * A `use` import only takes effect at file or namespace level, so it must land exactly where agent-map's planner puts
+     * it: on the line after the last import, else after the `namespace` line (or `<?php`) with a separating blank line.
+     */
+    private function assertImportSlots(string $source): void
+    {
+        $imports = array_filter($this->edits, static fn (RenamePlanEditEvidence $edit): bool => $edit->role === 'use_statement_insertion');
+        if ($imports === []) {
+            return;
+        }
+        try {
+            $statements = (new ParserFactory())->createForHostVersion()->parse($source) ?? [];
+        } catch (Error) {
+            $statements = null;
+        }
+        $lastUse = null;
+        $namespace = null;
+        foreach ($statements ?? [] as $statement) {
+            if ($statement instanceof Stmt\Namespace_) {
+                $namespace ??= $statement;
+                foreach ($statement->stmts as $inner) {
+                    $lastUse = $inner instanceof Stmt\Use_ || $inner instanceof Stmt\GroupUse ? $inner : $lastUse;
+                }
+            } elseif ($statement instanceof Stmt\Use_ || $statement instanceof Stmt\GroupUse) {
+                $lastUse = $statement;
+            }
+        }
+        $anchor = match (true) {
+            $lastUse !== null => $lastUse->getEndFilePos(),
+            $namespace !== null => strpos($source, ';', $namespace->getStartFilePos()),
+            default => strpos($source, '<?php'),
+        };
+        $newline = $anchor === false ? false : strpos($source, "\n", $anchor);
+        $slot = $newline === false ? null : $newline + 1;
+        foreach ($imports as $import) {
+            if ($statements === null || $import->startFilePos !== $slot || str_starts_with($import->replacement, "\n") !== ($lastUse === null)) {
+                throw new EditFailure(
+                    'The use import edit is not at the destination file\'s import slot (byte ' . ($slot ?? 'none') . '); refresh the Map and re-plan.',
+                    FailureCode::EvidenceChanged,
+                    ['path' => $import->path, 'expected_offset' => $slot, 'offset' => $import->startFilePos],
+                );
+            }
+        }
     }
 
     /**

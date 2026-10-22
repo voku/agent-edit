@@ -320,6 +320,9 @@ PHP);
         yield 'adds a constant' => [$edit(static fn (array $e): array => ['replacement' => str_replace("\n}", "\n    public const X = 1;\n}", $e['replacement'])] + $e), 'no other class member'];
         yield 'adds a trait use' => [$edit(static fn (array $e): array => ['replacement' => str_replace("\n}", "\n    use SomeTrait;\n}", $e['replacement'])] + $e), 'no other class member'];
         yield 'does not parse' => [$edit(static fn (array $e): array => ['replacement' => "\n    public function tomorrow( {\n}"] + $e), 'does not parse as class members'];
+        // Regression: the probe ignored everything after the class it closes, so code and a second class rode along.
+        yield 'closes the class and adds code after it' => [$edit(static fn (array $e): array => ['replacement' => $e['replacement'] . "\n\nfile_put_contents(__DIR__ . '/../PWNED', 'x');\n\nfinal class Smuggled\n{\n}"] + $e), 'nothing outside the destination class'];
+        yield 'closes the class and adds a class after it' => [$edit(static fn (array $e): array => ['replacement' => $e['replacement'] . "\n\nfinal class Smuggled\n{\n}"] + $e), 'nothing outside the destination class'];
         yield 'second file' => [static function (array $plan): array {
             $plan['edits'][] = ['path' => 'src/Src.php'] + $plan['edits'][0];
 
@@ -464,21 +467,43 @@ PHP);
         self::assertStringContainsString('overlapping edit ranges', $failure->getMessage());
     }
 
-    public function testAnInsertionAtTheVeryEndOfTheFileIsLegalButOnePastItIsNot(): void
+    public function testAUseImportIsOnlyAcceptedWhereThePlannerPutsIt(): void
     {
+        // Regression: only the text and the file digest were checked, so a forged offset put the import after the class
+        // (no effect, the copied method then fails with a TypeError) or inside a string literal, and verify passed.
         $plan = $this->copyPlan('Demo\\Src::needsImport');
-        $size = strlen(self::DEST);
-        $atEnd = $plan;
-        $atEnd['edits'][0]['start_file_pos'] = $atEnd['edits'][0]['end_file_pos'] = $size;
-        $past = $plan;
-        $past['edits'][0]['start_file_pos'] = $past['edits'][0]['end_file_pos'] = $size + 1;
+        self::assertSame(strpos(self::DEST, "namespace Demo;\n") + strlen("namespace Demo;\n"), $plan['edits'][0]['start_file_pos']);
 
-        // One past the end names no offset in the file at all; it must be refused as changed evidence, not read as ''.
-        $failure = $this->capturedOrFail(fn () => (new MethodInsertionPlanApplier())->preflight($past, $this->map(), $this->root), 'one byte past the end');
-        self::assertStringContainsString('evidence changed before apply', $failure->getMessage());
+        foreach ([
+            'end of file' => strlen(self::DEST),
+            'inside a method body' => (int) strpos(self::DEST, 'return 1;'),
+            'before the namespace' => (int) strpos(self::DEST, 'namespace Demo;'),
+            'one past the end' => strlen(self::DEST) + 1,
+        ] as $case => $offset) {
+            $forged = $plan;
+            $forged['edits'][0]['start_file_pos'] = $forged['edits'][0]['end_file_pos'] = $offset;
+            $failure = $this->capturedOrFail(fn () => $this->apply($forged, dryRun: true, label: 'FORGED'), $case);
+            self::assertMatchesRegularExpression('/import slot|evidence changed before apply/', $failure->getMessage(), $case);
+            self::assertSame(self::DEST, $this->read('src/Dest.php'), $case);
+        }
 
-        $prepared = (new MethodInsertionPlanApplier())->preflight($atEnd, $this->map(), $this->root);
-        self::assertStringEndsWith("\nuse Demo\\Lib\\Helper;\n", $prepared['files'][$this->root . '/src/Dest.php']);
+        self::assertTrue($this->apply($plan)->succeeded());
+        self::assertStringContainsString("namespace Demo;\n\nuse Demo\\Lib\\Helper;\n", $this->read('src/Dest.php'));
+    }
+
+    public function testTheDeclarationMustReplaceTheDestinationClassesOwnClosingBrace(): void
+    {
+        // Regression: only the plan's own line number tied the insertion to the class; any `}` on another class was taken.
+        $this->write('src/Dest.php', self::DEST . "\nfinal class Second {}\n");
+        $plan = $this->scaffoldPlan();
+        $source = $this->read('src/Dest.php');
+        $forged = $this->withInsertion($plan, static fn (array $e): array => ['start_file_pos' => strrpos($source, '}'), 'end_file_pos' => strrpos($source, '}')] + $e);
+
+        $failure = $this->capturedOrFail(fn () => $this->apply($forged, dryRun: true, label: 'FORGED'), 'another class brace');
+
+        self::assertStringContainsString('not at the closing brace of Demo\\Dest', $failure->getMessage());
+        self::assertSame($source, $this->read('src/Dest.php'));
+        self::assertTrue($this->apply($plan)->succeeded());
     }
 
     public function testCapabilitiesListBothAsExecutableWithTheirRunners(): void

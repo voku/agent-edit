@@ -190,6 +190,21 @@ final class CliJsonTest extends TestCase
         self::assertStringContainsString('--format must be text or json', $run['stderr']);
     }
 
+    public function testEditUsageErrorsHonourBothFormatSpellings(): void
+    {
+        // Regression: only `--format=json` was recognised before the plan existed; `--format json` printed a text error.
+        foreach ([['--format=json'], ['--format', 'json']] as $format) {
+            $run = $this->subprocess(['edit', 'src/Service.php', '--find', 'oldName', ...$format]);
+
+            self::assertSame(2, $run['exit'], implode(' ', $format));
+            self::assertSame('', $run['stderr'], implode(' ', $format));
+            $json = json_decode($run['stdout'], true);
+            self::assertIsArray($json, implode(' ', $format));
+            self::assertFalse($json['ok']);
+            self::assertSame('usage', $json['error']['code']);
+        }
+    }
+
     public function testTextModeErrorsStillGoToStderrWithTheOldPrefix(): void
     {
         $run = $this->subprocess(['apply', 'nope.json']);
