@@ -276,6 +276,16 @@ PHP, $result['content']);
         self::assertStringContainsString("    {\n        if (true) {\n            return 2;\n        }\n\n        return 3;\n    }\n", $replaced['content']);
     }
 
+    public function testReplacingAMethodWithItsOwnTextChangesNothingEvenWithAFlushLeftHeredoc(): void
+    {
+        $source = "<?php\n\nfinal class A\n{\n    /** Doc. */\n    public function one(): string\n    {\n        return <<<'TXT'\n<?php\n  keep\nTXT;\n    }\n\n    public function two(): int\n    {\n        return 2;\n    }\n}\n";
+        $code = "    /** Doc. */\n    public function one(): string\n    {\n        return <<<'TXT'\n<?php\n  keep\nTXT;\n    }";
+
+        $result = $this->edit($source, ['op' => 'replace_symbol', 'symbol' => 'A::one()', 'code' => $code], 'a.php');
+
+        self::assertSame($source, $result['content']);
+    }
+
     public function testInsertMemberIntoAnEmptyOneLineClassOpensTheBody(): void
     {
         $result = $this->edit("<?php\n\nfinal class Empty_ {}\n", ['op' => 'insert_member', 'symbol' => 'Empty_', 'code' => 'public int $x = 1;'], 'e.php');
