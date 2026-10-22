@@ -396,12 +396,48 @@ final readonly class PhpSourceEditor
             ];
         }
 
+        // A kind without imports yet opens its own block after the blocks of the kinds that precede it (PSR-12 and
+        // PER-CS: class, function, const). Before them it would sit above the class imports of the file.
+        $before = $this->lastImportOfEarlierKind($symbols->imports, $type);
+        if ($before !== null) {
+            $at = $layout->nextLineStart($before->getEndFilePos());
+            $blankFollows = trim($layout->lineAt($at)) === '';
+
+            return [
+                'range' => [$at, $at, $eol . $layout->indentAt($before->getStartFilePos()) . $statement . $eol . ($blankFollows ? '' : $eol)],
+                'summary' => sprintf('imported %s', $name),
+            ];
+        }
+
         [$at, $text] = $this->firstImport($content, $symbols, $statement, $eol, $path);
 
         return [
             'range' => [$at, $at, $text],
             'summary' => sprintf('imported %s', $name),
         ];
+    }
+
+    /**
+     * The last statement of the nearest preceding kind (class < function < const) that has imports in the file. A
+     * statement mixing kinds in one group belongs to no kind.
+     *
+     * @param list<Stmt\Use_|Stmt\GroupUse> $imports
+     */
+    private function lastImportOfEarlierKind(array $imports, int $type): Stmt\Use_|Stmt\GroupUse|null
+    {
+        $rank = [Stmt\Use_::TYPE_NORMAL => 0, Stmt\Use_::TYPE_FUNCTION => 1, Stmt\Use_::TYPE_CONSTANT => 2];
+        $found = null;
+        $foundRank = -1;
+        foreach ($imports as $use) {
+            $types = array_unique(array_column($this->importItems($use), 0));
+            $candidate = count($types) === 1 ? ($rank[$types[0]] ?? null) : null;
+            if ($candidate !== null && $candidate < $rank[$type] && $candidate >= $foundRank) {
+                $found = $use;
+                $foundRank = $candidate;
+            }
+        }
+
+        return $found;
     }
 
     /**
