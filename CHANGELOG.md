@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Symbol edits (`replace_symbol`, `replace_body`, `insert_member`) changed the value of a multi-line string literal: re-indentation added the target indentation to every continuation line of a single-quoted, double-quoted or backtick string (`'a\nb'` became `'a\n    b'`) and the common-indent removal stripped characters from them, with no error. Lines that start inside such a string are now left verbatim and do not count towards the common indentation; heredoc and nowdoc bodies still move together with their closing marker, which PHP removes again. Found by applying a `source_edit_plan` to a real test file.
 
+### Changed
+
+- `apply --diff` and `edit --diff` without `--dry-run` are a `usage` error instead of being silently ignored. A real apply never printed a diff, so a caller that passed `--diff` believed it had one; the message says to add `--dry-run`.
+
 ## 0.5.0 - 2026-10-22
 
 ### Added
