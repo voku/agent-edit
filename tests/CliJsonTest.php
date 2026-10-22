@@ -179,6 +179,8 @@ final class CliJsonTest extends TestCase
         yield 'bad task label' => [['apply', 'plan.json', '--task=../x', '--format=json'], 'usage', 'fix_arguments'];
         yield 'output outside root' => [['apply', 'plan.json', '--output-dir=../escape', '--format=json'], 'usage', 'fix_arguments'];
         yield 'diff without dry run' => [['apply', 'plan.json', '--diff', '--format=json'], 'usage', 'fix_arguments'];
+        yield 'plan field given as an option' => [['apply', 'plan.json', '--allow-signature-change', '--format=json'], 'usage', 'fix_arguments'];
+        yield 'unknown option without a value' => [['apply', 'plan.json', '--bogus', '--format=json'], 'usage', 'fix_arguments'];
         yield 'flag spelled with a space' => [['apply', 'plan.json', '--format', 'json', '--bogus', '1'], 'usage', 'fix_arguments'];
     }
 

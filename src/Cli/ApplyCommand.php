@@ -198,18 +198,22 @@ final readonly class ApplyCommand
             }
 
             $raw = substr($token, 2);
+            $name = str_contains($raw, '=') ? explode('=', $raw, 2)[0] : $raw;
+            if (!in_array($name, ['task', 'map-index', 'map-root', 'output-dir', 'format'], true)) {
+                throw new InvalidInputFailure(
+                    'Unknown option --' . $name . ' for `agent-edit apply` (accepted: --task, --map-index, --map-root, --output-dir, --dry-run, --diff, --format).'
+                    . ($name === 'allow-signature-change' ? ' To acknowledge an API change set "allow_signature_change": true in the plan (`agent-edit edit` has the flag).' : ''),
+                    FailureCode::Usage,
+                );
+            }
             if (str_contains($raw, '=')) {
-                [$name, $value] = explode('=', $raw, 2);
+                $value = explode('=', $raw, 2)[1];
             } else {
-                $name = $raw;
                 $value = $tokens[$index + 1] ?? null;
                 if (!is_string($value) || str_starts_with($value, '--')) {
                     throw new InvalidInputFailure('Missing value for option --' . $name, FailureCode::Usage);
                 }
                 ++$index;
-            }
-            if (!in_array($name, ['task', 'map-index', 'map-root', 'output-dir', 'format'], true)) {
-                throw new InvalidInputFailure('Unknown option --' . $name . ' for `agent-edit apply` (accepted: --task, --map-index, --map-root, --output-dir, --dry-run, --diff, --format).', FailureCode::Usage);
             }
             if ($value === '' || isset($values[$name])) {
                 throw new InvalidInputFailure('Invalid or duplicate option --' . $name, FailureCode::Usage);
