@@ -485,12 +485,10 @@ PHP;
 
     public function testInjectedPublicationFailureRestoresEverything(): void
     {
-        $renames = 0;
-        $applier = new SourceEditPlanApplier(static function (string $from, string $to) use (&$renames): bool {
-            ++$renames;
-
-            return $renames === 4 ? false : rename($from, $to);
-        });
+        // Fails publishing the last file, after extra/Made.php and README.md were already published.
+        $applier = new SourceEditPlanApplier(
+            static fn (string $from, string $to): bool => str_ends_with($to, '/src/Other.php') && str_contains($from, '-stage-') ? false : rename($from, $to),
+        );
 
         try {
             $applier->apply($this->plan([

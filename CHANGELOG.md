@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A missing plan file reported `Refactor refactor plan not found`; it now reads `Plan file not found` (and `Map index not found`, `Map root not found`).
 - The top-level help listed `verify` without `--accept-residue`, and `verify --help` omitted class removal plans and the `use` import residue check.
 - Residue verification trusted the scanner's capped reference list: with more than 200 historical mentions (a long `CHANGELOG.md` sorts first) it reported `open: 0` yet kept an otherwise passed result `incomplete`, and real mentions later in path order were never counted. The scan is now uncapped, `open`/`historical` are exact, and only the listed open references are capped at 50 (`truncated` says so).
+- `FileTransaction` published a rewritten file by moving the original to its backup and then moving the staged file in, so for a moment the file did not exist. A parallel `agent-edit edit` whose unlocked preflight read it then failed with "does not exist as a regular file" (seen in CI). The original is now kept in place (hard-link backup, copy where links are unsupported) and replaced by one atomic rename; rollback renames the backup back over a rewritten or deleted path.
 
 ## 0.4.4 - 2026-10-09
 
