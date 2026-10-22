@@ -350,11 +350,18 @@ final readonly class PhpSourceEditor
         }
         $type = ['class' => Stmt\Use_::TYPE_NORMAL, 'function' => Stmt\Use_::TYPE_FUNCTION, 'const' => Stmt\Use_::TYPE_CONSTANT][$kind];
         $shortName = is_string($alias) ? $alias : substr($name, (int) strrpos('\\' . $name, '\\'));
-        $sameKind = array_values(array_filter($symbols->imports, static fn (Stmt\Use_ $use): bool => $use->type === $type));
-        foreach ($sameKind as $use) {
-            foreach ($use->uses as $item) {
-                $existing = $item->name->toString();
-                $existingAlias = $item->getAlias()->toString();
+        $sameKind = [];
+        foreach ($symbols->imports as $use) {
+            $items = $this->importItems($use);
+            // A statement belongs to the block of a kind when everything it imports is of that kind (a mixed group
+            // `use A\{B, function c}` belongs to none, but its items still count for duplicates and aliases).
+            if (array_unique(array_column($items, 0)) === [$type]) {
+                $sameKind[] = $use;
+            }
+            foreach ($items as [$itemType, $existing, $existingAlias]) {
+                if ($itemType !== $type) {
+                    continue;
+                }
                 if (strcasecmp($existing, $name) === 0 && strcasecmp($existingAlias, $shortName) === 0) {
                     return ['range' => null, 'summary' => sprintf('%s is already imported', $name)];
                 }
@@ -374,7 +381,7 @@ final readonly class PhpSourceEditor
             $insertBefore = null;
             if ($sorted) {
                 foreach ($sameKind as $use) {
-                    if (strcasecmp($use->uses[0]->name->toString(), $name) > 0) {
+                    if (strcasecmp($this->importItems($use)[0][1], $name) > 0) {
                         $insertBefore = $use;
                         break;
                     }
@@ -397,10 +404,31 @@ final readonly class PhpSourceEditor
         ];
     }
 
-    /** @param list<Stmt\Use_> $uses */
+    /**
+     * The imports one `use` statement makes: type, fully qualified name and the name it is known by. A grouped statement
+     * (`use A\{B, C}`) imports `A\B` and `A\C`; an item without its own type takes the statement's.
+     *
+     * @return list<array{int, string, string}>
+     */
+    private function importItems(Stmt\Use_|Stmt\GroupUse $use): array
+    {
+        $prefix = $use instanceof Stmt\GroupUse ? $use->prefix->toString() . '\\' : '';
+        $items = [];
+        foreach ($use->uses as $item) {
+            $items[] = [
+                $item->type !== Stmt\Use_::TYPE_UNKNOWN ? $item->type : $use->type,
+                $prefix . $item->name->toString(),
+                $item->getAlias()->toString(),
+            ];
+        }
+
+        return $items;
+    }
+
+    /** @param list<Stmt\Use_|Stmt\GroupUse> $uses */
     private function importsSorted(array $uses): bool
     {
-        $names = array_map(static fn (Stmt\Use_ $use): string => strtolower($use->uses[0]->name->toString()), $uses);
+        $names = array_map(fn (Stmt\Use_|Stmt\GroupUse $use): string => strtolower($this->importItems($use)[0][1]), $uses);
         $sorted = $names;
         sort($sorted, SORT_STRING);
 

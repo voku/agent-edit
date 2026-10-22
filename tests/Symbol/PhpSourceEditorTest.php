@@ -406,6 +406,45 @@ PHP, $result['content']);
         $this->assertParses($function['content']);
     }
 
+    public function testAddUseKnowsGroupedImports(): void
+    {
+        $source = "<?php\n\nnamespace App;\n\nuse Foo\\{Bar, Baz};\nuse Zed\\Last;\n\nfinal class B {}\n";
+
+        // A grouped statement counts as an import: the new one joins the block, no separate block is opened.
+        self::assertSame(
+            "<?php\n\nnamespace App;\n\nuse Foo\\{Bar, Baz};\nuse Zed\\First;\nuse Zed\\Last;\n\nfinal class B {}\n",
+            $this->edit($source, ['op' => 'add_use', 'name' => 'Zed\\First'], 'b.php')['content'],
+        );
+        self::assertSame(
+            "<?php\n\nnamespace App;\n\nuse Aaa\\First;\nuse Foo\\{Bar, Baz};\nuse Zed\\Last;\n\nfinal class B {}\n",
+            $this->edit($source, ['op' => 'add_use', 'name' => 'Aaa\\First'], 'b.php')['content'],
+        );
+
+        $onlyGroup = "<?php\n\nnamespace App;\n\nuse Foo\\{Bar, Baz};\n\nfinal class B {}\n";
+        self::assertSame(
+            "<?php\n\nnamespace App;\n\nuse Foo\\{Bar, Baz};\nuse Qux\\Thing;\n\nfinal class B {}\n",
+            $this->edit($onlyGroup, ['op' => 'add_use', 'name' => 'Qux\\Thing'], 'b.php')['content'],
+        );
+    }
+
+    public function testAddUseSeesWhatAGroupedImportAlreadyImports(): void
+    {
+        $source = "<?php\n\nnamespace App;\n\nuse Foo\\{Bar, Baz as Zab};\nuse function Foo\\{helper};\n\nfinal class B {}\n";
+
+        $same = $this->edit($source, ['op' => 'add_use', 'name' => 'Foo\\Bar'], 'b.php');
+        self::assertSame($source, $same['content']);
+        self::assertSame('Foo\\Bar is already imported', $same['summary']);
+
+        $aliased = $this->edit($source, ['op' => 'add_use', 'name' => 'Foo\\Baz', 'alias' => 'Zab'], 'b.php');
+        self::assertSame($source, $aliased['content']);
+
+        $function = $this->edit($source, ['op' => 'add_use', 'name' => 'Foo\\helper', 'kind' => 'function'], 'b.php');
+        self::assertSame($source, $function['content'], 'the grouped function import counts');
+
+        $this->expectExceptionMessage('already imports Foo\\Bar as Bar; set a different `alias`');
+        $this->edit($source, ['op' => 'add_use', 'name' => 'Other\\Bar'], 'b.php');
+    }
+
     public function testAddUseIntoANamespaceWithoutImports(): void
     {
         $result = $this->edit("<?php\n\nnamespace App;\n\nfinal class A {}\n", ['op' => 'add_use', 'name' => 'Lib\Thing'], 'a.php');
