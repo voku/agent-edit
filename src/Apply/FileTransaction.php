@@ -86,13 +86,14 @@ final readonly class FileTransaction
                 }
                 $temporary = $this->temporaryPath($operation->path, 'stage');
                 $staged[$operation->path] = $temporary;
-                $written = file_put_contents($temporary, $operation->content, LOCK_EX);
-                if (!is_int($written) || $written !== strlen($operation->content)) {
-                    throw new RuntimeException('Unable to stage complete file contents: ' . $operation->path);
-                }
                 $permissions = $operation->isCreate() ? 0o644 : fileperms($operation->path);
-                if (!is_int($permissions) || !chmod($temporary, $permissions & 0o777)) {
+                $handle = is_int($permissions) ? $this->createRestricted($temporary, $permissions) : null;
+                if ($handle === null) {
                     throw new RuntimeException('Unable to set staged file permissions: ' . $operation->path);
+                }
+                $written = fwrite($handle, $operation->content);
+                if (!fclose($handle) || $written !== strlen($operation->content)) {
+                    throw new RuntimeException('Unable to stage complete file contents: ' . $operation->path);
                 }
             }
             foreach ($operations as $operation) {
@@ -124,10 +125,11 @@ final readonly class FileTransaction
                 }
 
                 $backup = $this->temporaryPath($operation->path, 'backup');
+                // Registered first, so rollback also removes a backup that preserve() only partly created.
+                $backups[$operation->path] = $backup;
                 if (!$this->preserve($operation->path, $backup)) {
                     throw new RuntimeException('Unable to back up file before publication: ' . $this->display($realRoot, $operation->path));
                 }
-                $backups[$operation->path] = $backup;
                 $backupHash = hash_file('sha256', $backup);
                 if (!is_string($backupHash) || !hash_equals((string) $operation->expectedSha256, $backupHash)) {
                     throw new RuntimeException('File changed during publication precondition capture: ' . $this->display($realRoot, $operation->path));
@@ -331,8 +333,40 @@ final readonly class FileTransaction
             return true;
         }
         $permissions = fileperms($path);
+        $target = is_int($permissions) ? $this->createRestricted($backup, $permissions) : null;
+        $source = $target === null ? false : @fopen($path, 'rb');
+        if ($target === null || !is_resource($source)) {
+            if ($target !== null) {
+                fclose($target);
+            }
 
-        return @copy($path, $backup) && is_int($permissions) && chmod($backup, $permissions & 0o777);
+            return false;
+        }
+        $copied = stream_copy_to_stream($source, $target);
+        fclose($source);
+
+        return fclose($target) && $copied === filesize($path);
+    }
+
+    /**
+     * Creates a new, empty file that already has its final permissions, so no content is ever readable more widely than
+     * the file it stages or backs up (a umask-default mode applied before chmod would expose a 0600 file's bytes).
+     *
+     * @return resource|null an open write handle, or null when the file cannot be created exclusively
+     */
+    private function createRestricted(string $path, int $permissions)
+    {
+        $handle = @fopen($path, 'xb');
+        if (!is_resource($handle)) {
+            return null;
+        }
+        if (!chmod($path, $permissions & 0o777)) {
+            fclose($handle);
+
+            return null;
+        }
+
+        return $handle;
     }
 
     private function move(string $from, string $to): bool

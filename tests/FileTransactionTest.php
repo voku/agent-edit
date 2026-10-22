@@ -62,6 +62,22 @@ final class FileTransactionTest extends TestCase
         self::assertSame(0o600, fileperms($this->root . '/src/A.php') & 0o777);
     }
 
+    public function testAReadOnlyFileIsRewrittenAndKeepsItsMode(): void
+    {
+        // Staged and backup files get their final mode before any byte is written; a 0400 file must still be writable
+        // through the handle that created its staged copy.
+        chmod($this->root . '/src/A.php', 0o400);
+
+        (new FileTransaction())->run([
+            FileOperation::write($this->root . '/src/A.php', "<?php\n\nfinal class A4 {}\n", $this->hash('src/A.php')),
+        ], $this->root);
+
+        self::assertStringContainsString('A4', (string) file_get_contents($this->root . '/src/A.php'));
+        self::assertSame(0o400, fileperms($this->root . '/src/A.php') & 0o777);
+        self::assertSame([], $this->leftovers());
+        chmod($this->root . '/src/A.php', 0o600);
+    }
+
     public function testStaleHashRefusesBeforeAnyWrite(): void
     {
         $stale = $this->hash('src/A.php');
