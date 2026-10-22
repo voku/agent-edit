@@ -68,6 +68,28 @@ final class TextLayoutTest extends TestCase
         self::assertSame(self::evaluate($code), self::evaluate($result));
     }
 
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function indentUnits(): iterable
+    {
+        yield 'four spaces' => ["<?php\nclass A\n{\n    public \$x;\n}\n", '    '];
+        yield 'two spaces' => ["<?php\nclass A\n{\n  public \$x;\n}\n", '  '];
+        yield 'tab' => ["<?php\nclass A\n{\n\tpublic \$x;\n}\n", "\t"];
+        yield 'nothing indented' => ['<?php class A {}', '    '];
+        yield 'file docblock first' => ["<?php\n\n/**\n * File doc.\n *\n * @package x\n */\nclass A\n{\n    public \$x;\n}\n", '    '];
+        yield 'file docblock first, tabs' => ["<?php\n\n/**\n * File doc.\n */\nclass A\n{\n\tpublic \$x;\n}\n", "\t"];
+        yield 'file docblock first, crlf' => ["<?php\r\n/**\r\n * Doc.\r\n */\r\nclass A\r\n{\r\n    public \$x;\r\n}\r\n", '    '];
+        yield 'multi-line string first' => ["<?php\n\$sql = 'select\n   a\n  from b';\nclass A\n{\n    public \$x;\n}\n", '    '];
+        yield 'heredoc first' => ["<?php\n\$t = <<<TXT\n   odd\nTXT;\nclass A\n{\n\tpublic \$x;\n}\n", "\t"];
+    }
+
+    #[DataProvider('indentUnits')]
+    public function testIndentUnitIsTheCodesFirstIndentNotACommentOrStringLine(string $source, string $expected): void
+    {
+        self::assertSame($expected, (new TextLayout($source))->indentUnit());
+    }
+
     public function testSpaceIndentedCodeLandsAsTabsInATabIndentedFile(): void
     {
         $code = "public function f(array \$a): int\n{\n    if (\$a) {\n        return [\n            1,\n        ][0];\n    }\n\n    return 0;\n}";

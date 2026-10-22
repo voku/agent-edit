@@ -51,10 +51,21 @@ final readonly class TextLayout
         return trim(substr($this->content, $this->lineStart($position), $position - $this->lineStart($position)), " \t") === '';
     }
 
-    /** One level of indentation: the first indented line's leading whitespace, defaulting to four spaces. */
+    /**
+     * One level of indentation: the leading whitespace of the first indented line of code (a tab, or its spaces; four
+     * spaces when nothing is indented). Doc-comment continuation lines (` * text`, aligned one space past the comment
+     * start) and the content of multi-line strings say nothing about the indentation and are skipped: a file that opens
+     * with a docblock would otherwise report a one-space unit.
+     */
     public function indentUnit(): string
     {
-        if (preg_match('/^(\t+|[ ]+)\S/m', $this->content, $matches) === 1) {
+        $lines = explode("\n", $this->content);
+        $modes = self::lineModes(str_replace(["\r\n", "\r"], "\n", $this->content))[0];
+        foreach ($lines as $index => $line) {
+            if (($modes[$index] ?? self::CODE) !== self::CODE || preg_match('/^(\t+|[ ]+)(\S)/', $line, $matches) !== 1 || $matches[2] === '*') {
+                continue;
+            }
+
             return $matches[1][0] === "\t" ? "\t" : (strlen($matches[1]) % 4 === 0 ? '    ' : $matches[1]);
         }
 
