@@ -226,23 +226,100 @@ PHP;
         }
     }
 
-    public function testCrLfFilesRequireExactBytesAndExplainTheMismatch(): void
+    public function testExactCrLfBytesStillMatchAsWritten(): void
+    {
+        file_put_contents($this->root . '/crlf.txt', "one\r\ntwo\r\nthree\r\n");
+
+        (new SourceEditPlanApplier())->apply($this->plan([
+            ['path' => 'crlf.txt', 'find' => "one\r\ntwo", 'replace' => "uno\r\ndos"],
+        ]), $this->root);
+
+        self::assertSame("uno\r\ndos\r\nthree\r\n", $this->read('crlf.txt'));
+    }
+
+    public function testMultiLineLfTextMatchesAFileThatIsCrLfThroughoutAndKeepsItsLineEnding(): void
+    {
+        $original = "one\r\ntwo\r\nthree\r\nfour\r\n";
+        file_put_contents($this->root . '/crlf.txt', $original);
+
+        $result = (new SourceEditPlanApplier())->apply($this->plan([
+            ['path' => 'crlf.txt', 'find' => "two\nthree\n", 'replace' => "2\n2b\n3\n"],
+        ]), $this->root);
+
+        self::assertSame("one\r\n2\r\n2b\r\n3\r\nfour\r\n", $this->read('crlf.txt'));
+        self::assertSame(substr_count($this->read('crlf.txt'), "\n"), substr_count($this->read('crlf.txt'), "\r\n"), 'no bare LF is introduced');
+        self::assertSame($original, $result->evidence['pre_images']['crlf.txt']);
+        self::assertSame(hash('sha256', $this->read('crlf.txt')), $result->evidence['files'][0]['after_sha256']);
+    }
+
+    public function testAReplacementThatAlreadyUsesCrLfIsNotDoubled(): void
+    {
+        file_put_contents($this->root . '/crlf.txt', "one\r\ntwo\r\nthree\r\n");
+
+        (new SourceEditPlanApplier())->apply($this->plan([
+            ['path' => 'crlf.txt', 'find' => "one\ntwo", 'replace' => "1\r\n2"],
+        ]), $this->root);
+
+        self::assertSame("1\r\n2\r\nthree\r\n", $this->read('crlf.txt'));
+    }
+
+    public function testConvertedLfTextKeepsTheUniquenessChecks(): void
+    {
+        file_put_contents($this->root . '/crlf.txt', "a\r\nb\r\nx\r\na\r\nb\r\n");
+
+        try {
+            (new SourceEditPlanApplier())->preflight($this->plan([
+                ['path' => 'crlf.txt', 'find' => "a\nb", 'replace' => 'z'],
+            ]), $this->root);
+            self::fail('An ambiguous converted anchor must be refused.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('occurs 2 times', $exception->getMessage());
+        }
+
+        (new SourceEditPlanApplier())->apply($this->plan([
+            ['path' => 'crlf.txt', 'find' => "a\nb", 'replace' => "z\ny", 'occurrence' => 2],
+        ]), $this->root);
+        self::assertSame("a\r\nb\r\nx\r\nz\r\ny\r\n", $this->read('crlf.txt'));
+
+        file_put_contents($this->root . '/crlf.txt', "a\r\nb\r\nx\r\na\r\nb\r\n");
+        (new SourceEditPlanApplier())->apply($this->plan([
+            ['path' => 'crlf.txt', 'find' => "a\nb", 'replace' => 'z', 'all' => true],
+        ]), $this->root);
+        self::assertSame("z\r\nx\r\nz\r\n", $this->read('crlf.txt'));
+    }
+
+    public function testLfTextIsNotConvertedForAFileThatMixesLineEndingsAndTheRefusalSaysSo(): void
+    {
+        $mixed = "one\r\ntwo\nthree\r\n";
+        file_put_contents($this->root . '/mixed.txt', $mixed);
+
+        try {
+            (new SourceEditPlanApplier())->preflight($this->plan([
+                ['path' => 'mixed.txt', 'find' => "one\ntwo", 'replace' => 'x'],
+            ]), $this->root);
+            self::fail('A file with mixed line endings has no line ending to convert to.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('mixes LF and CRLF', $exception->getMessage());
+            self::assertStringContainsString('different whitespace', $exception->getMessage());
+        }
+
+        self::assertSame($mixed, $this->read('mixed.txt'));
+    }
+
+    public function testConvertedLfTextThatIsNotInTheFileIsStillMissingAndNothingChanges(): void
     {
         file_put_contents($this->root . '/crlf.txt', "one\r\ntwo\r\nthree\r\n");
 
         try {
             (new SourceEditPlanApplier())->preflight($this->plan([
-                ['path' => 'crlf.txt', 'find' => "one\ntwo", 'replace' => 'x'],
+                ['path' => 'crlf.txt', 'find' => "one\nTWO", 'replace' => 'x'],
             ]), $this->root);
-            self::fail('LF text must not silently match CRLF content.');
+            self::fail('Text that is not in the file must still be refused.');
         } catch (RuntimeException $exception) {
-            self::assertStringContainsString('different whitespace', $exception->getMessage());
+            self::assertStringContainsString('does not occur', $exception->getMessage());
         }
 
-        (new SourceEditPlanApplier())->apply($this->plan([
-            ['path' => 'crlf.txt', 'find' => "one\r\ntwo", 'replace' => "uno\r\ndos"],
-        ]), $this->root);
-        self::assertSame("uno\r\ndos\r\nthree\r\n", $this->read('crlf.txt'));
+        self::assertSame("one\r\ntwo\r\nthree\r\n", $this->read('crlf.txt'));
     }
 
     public function testMultibyteTextIsReplacedByBytesWithoutCorruption(): void
