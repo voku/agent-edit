@@ -217,6 +217,10 @@ final readonly class ApplyCommand
             $values[$name] = $value;
         }
 
+        if ($showDiff && !$dryRun) {
+            throw new InvalidInputFailure('--diff prints the preview of a --dry-run; add --dry-run (a real apply reports changed_files, and the receipt records the pre-images).', FailureCode::Usage);
+        }
+
         $format = $values['format'] ?? 'text';
         if (!in_array($format, ['text', 'json'], true)) {
             throw new InvalidInputFailure('--format must be text or json.', FailureCode::Usage);
