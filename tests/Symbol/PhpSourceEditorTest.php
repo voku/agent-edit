@@ -445,6 +445,26 @@ PHP, $result['content']);
         );
     }
 
+    public function testAddUseRefusesToOpenALaterKindBlockAfterAnImportThatEndsPhpOnItsLine(): void
+    {
+        // The next line start would be outside the PHP tags: the new import would be output text.
+        $source = "<?php\nnamespace App;\nuse A\\One; ?>\nhtml\n";
+
+        $this->expectException(SymbolEditException::class);
+        $this->expectExceptionMessage('replace_text');
+        $this->edit($source, ['op' => 'add_use', 'name' => 'V\\f', 'kind' => 'function'], 'c.php');
+    }
+
+    public function testAddUseStillOpensALaterKindBlockWhenTheImportLineEndsWithAComment(): void
+    {
+        $source = "<?php\nnamespace App;\nuse A\\One; // why\n\nfinal class C {}\n";
+
+        self::assertSame(
+            "<?php\nnamespace App;\nuse A\\One; // why\n\nuse function V\\f;\n\nfinal class C {}\n",
+            $this->edit($source, ['op' => 'add_use', 'name' => 'V\\f', 'kind' => 'function'], 'c.php')['content'],
+        );
+    }
+
     public function testAddUseKeepsTheLineEndingWhenOpeningALaterKindBlock(): void
     {
         $crlf = "<?php\r\n\r\nnamespace App;\r\n\r\nuse A\\One;\r\n\r\nfinal class C {}\r\n";

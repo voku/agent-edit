@@ -200,8 +200,8 @@ final class SignatureGuard
     {
         $parts = [];
         $parts[] = ($flags & Modifiers::PROTECTED) !== 0 ? 'protected' : 'public';
-        // PHP 8.4 asymmetric visibility. Literal flag values: the `Modifiers::*_SET` constants only exist from php-parser 5.4.
-        foreach ([128 => 'public(set)', 256 => 'protected(set)', 512 => 'private(set)'] as $flag => $word) {
+        // PHP 8.4 asymmetric visibility (php-parser 5.2+).
+        foreach ([Modifiers::PUBLIC_SET => 'public(set)', Modifiers::PROTECTED_SET => 'protected(set)', Modifiers::PRIVATE_SET => 'private(set)'] as $flag => $word) {
             if (($flags & $flag) !== 0) {
                 $parts[] = $word;
             }

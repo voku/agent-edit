@@ -401,6 +401,9 @@ final readonly class PhpSourceEditor
         $before = $this->lastImportOfEarlierKind($symbols->imports, $type);
         if ($before !== null) {
             $at = $layout->nextLineStart($before->getEndFilePos());
+            if (str_contains(substr($content, $before->getEndFilePos() + 1, $at - $before->getEndFilePos() - 1), '?>')) {
+                throw new SymbolEditException($path . ' closes PHP on the line of its last import; add the import with replace_text.');
+            }
             $blankFollows = trim($layout->lineAt($at)) === '';
 
             return [
