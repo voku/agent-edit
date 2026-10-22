@@ -265,6 +265,17 @@ PHP, $result['content']);
         self::assertStringContainsString("\t{\n\t\tif (true) {\n\t\t\treturn 2;\n\t\t}\n\n\t\treturn 3;\n\t}\n", $result['content']);
     }
 
+    public function testAFileThatOpensWithADocblockStillGetsFourSpaceMembersAndBodies(): void
+    {
+        $source = "<?php\n\n/**\n * File doc.\n */\nfinal class A\n{\n    public function one(): int\n    {\n        return 1;\n    }\n}\n";
+
+        $inserted = $this->edit($source, ['op' => 'insert_member', 'symbol' => 'A', 'code' => "public function two(): int\n{\n    return 2;\n}"], 'a.php');
+        self::assertStringContainsString("\n    public function two(): int\n    {\n        return 2;\n    }\n}\n", $inserted['content']);
+
+        $replaced = $this->edit($source, ['op' => 'replace_body', 'symbol' => 'A::one()', 'code' => "if (true) {\n    return 2;\n}\n\nreturn 3;"], 'a.php');
+        self::assertStringContainsString("    {\n        if (true) {\n            return 2;\n        }\n\n        return 3;\n    }\n", $replaced['content']);
+    }
+
     public function testInsertMemberIntoAnEmptyOneLineClassOpensTheBody(): void
     {
         $result = $this->edit("<?php\n\nfinal class Empty_ {}\n", ['op' => 'insert_member', 'symbol' => 'Empty_', 'code' => 'public int $x = 1;'], 'e.php');
