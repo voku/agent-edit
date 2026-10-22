@@ -207,6 +207,16 @@ final class DirectEditFailureCodesTest extends TestCase
         self::assertSame(self::CALC, $this->read('src/Calc.php'));
     }
 
+    public function testApplyNamesAnUnknownOptionEvenWithoutAValueAndSaysWhereTheSignatureAcknowledgementGoes(): void
+    {
+        $error = $this->error(['apply', 'plan.json', '--allow-signature-change', '--format=json']);
+
+        self::assertSame('usage', $error['code']);
+        self::assertStringContainsString('Unknown option --allow-signature-change for `agent-edit apply`', $error['message']);
+        self::assertStringContainsString('"allow_signature_change": true in the plan', $error['message']);
+        self::assertStringNotContainsString('Missing value', $error['message']);
+    }
+
     public function testDryRunOfAPlanWithACreationShowsAWholeFileAddition(): void
     {
         $plan = json_encode(['type' => 'source_edit_plan', 'contract_version' => '1.0', 'target_id' => 'new', 'creates' => [['path' => 'tests/CalcTest.php', 'content' => "<?php\n\n// test\n"]]], JSON_THROW_ON_ERROR);
