@@ -18,7 +18,7 @@ final readonly class SourceSymbols
 {
     /**
      * @param list<SourceSymbol> $symbols
-     * @param list<Stmt\Use_> $imports namespace-level `use` statements, in source order
+     * @param list<Stmt\Use_|Stmt\GroupUse> $imports namespace-level `use` statements (also grouped ones), in source order
      * @param list<Stmt\Namespace_> $namespaces
      * @param list<Token> $tokens
      */
@@ -167,12 +167,12 @@ final readonly class SourceSymbols
 
     /**
      * @param list<SourceSymbol> $symbols
-     * @param list<Stmt\Use_> $imports
+     * @param list<Stmt\Use_|Stmt\GroupUse> $imports
      */
     private static function collect(Stmt $statement, string $namespace, array &$symbols, array &$imports): void
     {
         $prefix = $namespace === '' ? '' : $namespace . '\\';
-        if ($statement instanceof Stmt\Use_) {
+        if ($statement instanceof Stmt\Use_ || $statement instanceof Stmt\GroupUse) {
             $imports[] = $statement;
 
             return;

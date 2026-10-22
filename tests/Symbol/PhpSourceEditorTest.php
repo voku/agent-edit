@@ -406,6 +406,67 @@ PHP, $result['content']);
         $this->assertParses($function['content']);
     }
 
+    public function testAddUseKnowsGroupedImports(): void
+    {
+        $source = "<?php\n\nnamespace App;\n\nuse Foo\\{Bar, Baz};\nuse Zed\\Last;\n\nfinal class B {}\n";
+
+        // A grouped statement counts as an import: the new one joins the block, no separate block is opened.
+        self::assertSame(
+            "<?php\n\nnamespace App;\n\nuse Foo\\{Bar, Baz};\nuse Zed\\First;\nuse Zed\\Last;\n\nfinal class B {}\n",
+            $this->edit($source, ['op' => 'add_use', 'name' => 'Zed\\First'], 'b.php')['content'],
+        );
+        self::assertSame(
+            "<?php\n\nnamespace App;\n\nuse Aaa\\First;\nuse Foo\\{Bar, Baz};\nuse Zed\\Last;\n\nfinal class B {}\n",
+            $this->edit($source, ['op' => 'add_use', 'name' => 'Aaa\\First'], 'b.php')['content'],
+        );
+
+        $onlyGroup = "<?php\n\nnamespace App;\n\nuse Foo\\{Bar, Baz};\n\nfinal class B {}\n";
+        self::assertSame(
+            "<?php\n\nnamespace App;\n\nuse Foo\\{Bar, Baz};\nuse Qux\\Thing;\n\nfinal class B {}\n",
+            $this->edit($onlyGroup, ['op' => 'add_use', 'name' => 'Qux\\Thing'], 'b.php')['content'],
+        );
+    }
+
+    public function testAddUseSeesWhatAGroupedImportAlreadyImports(): void
+    {
+        $source = "<?php\n\nnamespace App;\n\nuse Foo\\{Bar, Baz as Zab};\nuse function Foo\\{helper};\n\nfinal class B {}\n";
+
+        $same = $this->edit($source, ['op' => 'add_use', 'name' => 'Foo\\Bar'], 'b.php');
+        self::assertSame($source, $same['content']);
+        self::assertSame('Foo\\Bar is already imported', $same['summary']);
+
+        $aliased = $this->edit($source, ['op' => 'add_use', 'name' => 'Foo\\Baz', 'alias' => 'Zab'], 'b.php');
+        self::assertSame($source, $aliased['content']);
+
+        $function = $this->edit($source, ['op' => 'add_use', 'name' => 'Foo\\helper', 'kind' => 'function'], 'b.php');
+        self::assertSame($source, $function['content'], 'the grouped function import counts');
+
+        $this->expectExceptionMessage('already imports Foo\\Bar as Bar; set a different `alias`');
+        $this->edit($source, ['op' => 'add_use', 'name' => 'Other\\Bar'], 'b.php');
+    }
+
+    public function testAddUseInAScriptWithAShebangGoesAfterTheOpenTagAndIsIdempotent(): void
+    {
+        $source = "#!/usr/bin/env php\n<?php\n\ndeclare(strict_types=1);\n\nrequire __DIR__ . '/vendor/autoload.php';\n";
+
+        foreach (['class' => 'use Lib\\Thing;', 'function' => 'use function Lib\\helper;', 'const' => 'use const Lib\\LIMIT;'] as $kind => $statement) {
+            $name = $kind === 'class' ? 'Lib\\Thing' : ($kind === 'function' ? 'Lib\\helper' : 'Lib\\LIMIT');
+            $result = $this->edit($source, ['op' => 'add_use', 'name' => $name, 'kind' => $kind], 's.php');
+
+            self::assertSame("#!/usr/bin/env php\n<?php\n\ndeclare(strict_types=1);\n\n" . $statement . "\n\nrequire __DIR__ . '/vendor/autoload.php';\n", $result['content'], $kind);
+            $again = $this->edit($result['content'], ['op' => 'add_use', 'name' => $name, 'kind' => $kind], 's.php');
+            self::assertSame($result['content'], $again['content'], $kind . ' is idempotent');
+        }
+    }
+
+    public function testAddUseAfterMarkupBeforeTheFirstOpenTag(): void
+    {
+        $result = $this->edit("<html>\n<?php\nfinal class H {}\n", ['op' => 'add_use', 'name' => 'Lib\\Thing'], 'h.php');
+
+        self::assertStringStartsWith("<html>\n<?php\n", $result['content']);
+        self::assertStringContainsString("use Lib\\Thing;\n", $result['content']);
+    }
+
     public function testAddUseIntoANamespaceWithoutImports(): void
     {
         $result = $this->edit("<?php\n\nnamespace App;\n\nfinal class A {}\n", ['op' => 'add_use', 'name' => 'Lib\Thing'], 'a.php');
