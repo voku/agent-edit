@@ -18,6 +18,12 @@ final readonly class EditReceipt
         public string $receiptPath,
         public string $planType,
         public string $targetId,
+        /** @var list<array{path: string, change: string, final_path?: string, lines_added: int, lines_removed: int}> what a dry run found it would change; empty for a real apply */
+        public array $plannedChanges = [],
+        /** unified diff of `plannedChanges`; only a dry run fills it */
+        public string $diff = '',
+        /** @var list<string> files the apply was observed to change (git or Map-manifest evidence); empty for a dry run */
+        public array $changedFiles = [],
     ) {
     }
 

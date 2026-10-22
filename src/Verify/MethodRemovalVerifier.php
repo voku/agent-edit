@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace voku\AgentEdit\Verify;
 
+use voku\AgentEdit\Failure\EditFailure;
+use voku\AgentEdit\Failure\FailureCode;
 use voku\AgentEdit\Plan\MethodRemovalPlanDocument;
 use HelgeSverre\Toon\Toon;
 use JsonException;
@@ -65,10 +67,10 @@ final readonly class MethodRemovalVerifier implements BundleVerifier
 
         $map = $this->withRuntimeRoot($this->reader->read($mapIndex), $mapRoot);
         if ($map->staleEntries() !== []) {
-            throw new RuntimeException('Current agent-map evidence is stale after method removal execution.');
+            throw new EditFailure('Current agent-map evidence is stale after method removal execution.', FailureCode::EvidenceStale);
         }
         if (!str_ends_with($map->backend, '+phpstan')) {
-            throw new RuntimeException('Method removal verification requires a PHPStan-backed current map.');
+            throw new EditFailure('Method removal verification requires a PHPStan-backed current map.', FailureCode::MapBackendUnsupported);
         }
 
         $viaManifest = ($execution['changed_files_source'] ?? null) === MapManifestEvidence::SOURCE;

@@ -81,6 +81,38 @@ Direct edits and Map plans are complementary, not interchangeable:
 | Rename, move or remove a class/method/property/constant | the matching `agent-map` plan, then `apply` |
 | Signature change whose callers you checked yourself | `source_edit_plan` with `allow_signature_change` |
 
+## Using it from an agent
+
+`--format=json` makes every `apply`, `edit` and `verify` call one parseable document on stdout (a failure included; nothing is split onto stderr) with the same exit codes as text mode. A dry run shows what would change before anything is written:
+
+```bash
+vendor/bin/agent-edit apply plan.json --dry-run --diff --format=json   # planned_changes + unified diff, no source written
+vendor/bin/agent-edit edit src/Calc.php --find='a - b' --replace='a + b' --dry-run --diff
+vendor/bin/agent-edit apply plan.json --task T1 --format=json          # changed_files + next_action
+```
+
+A failure looks like this, and `error.code` is stable:
+
+```json
+{"schema_version": "1.0", "command": "apply", "ok": false,
+ "error": {"code": "anchor_ambiguous", "message": "edits[0]: `find` occurs 2 times in src/Calc.php ...",
+           "next_action": "disambiguate_anchor", "hint": "Nothing was changed. `find` matches more than once; ...",
+           "details": {"path": "src/Calc.php", "edit": 0, "matches": 2}}}
+```
+
+| `error.code` | meaning | `next_action` |
+| --- | --- | --- |
+| `usage`, `input_not_found` | bad command line, missing file | `fix_arguments`, `provide_input` |
+| `plan_malformed`, `plan_unsupported`, `plan_refused` | the plan breaks its contract, is not executable, or is blocked/unsafe | `replan` |
+| `evidence_stale`, `evidence_changed` | the Map or the source moved since the plan was made | `refresh_map_and_replan` |
+| `map_backend_unsupported` | the plan needs a PHPStan-backed Map | `rebuild_map_with_phpstan` |
+| `anchor_missing`, `anchor_ambiguous`, `edits_overlap` | a direct edit's text is absent, matches twice, or two edits touch the same text | `reread_and_retry`, `disambiguate_anchor`, `merge_edits` |
+| `api_change_refused` | a direct edit would change a public declaration | `use_map_plan_or_acknowledge` |
+| `target_exists` | a file to create already exists | `edit_existing_file` |
+| `apply_failed`, `failed` | rolled back / not classified | `inspect_working_tree`, `report` |
+
+`next_action` names the only recovery that is legal for that cause; it carries no authority, a caller still decides. A cause that is not classified is reported as `failed`/`report`, never guessed from the message. A dry run still writes a `prepared` receipt bundle (so a host can see the attempt); it never writes source, and its diff is printed, not persisted.
+
 ## Capabilities
 
 ```bash
@@ -90,7 +122,7 @@ vendor/bin/agent-edit instructions --format=json
 vendor/bin/agent-map plan-capabilities --format=json | vendor/bin/agent-edit instructions --with-map=-
 ```
 
-The second command intersects what Map can *plan* with what agent-edit can *execute*: `executable`, `planned_not_executable` (for example `class_scaffold_plan`) and `executable_not_planned`. A host should expose only the intersection to a coding agent.
+The second command intersects what Map can *plan* with what agent-edit can *execute*: `executable`, `planned_not_executable` (a contract Map publishes that agent-edit cannot yet execute) and `executable_not_planned`. A host should expose only the intersection to a coding agent.
 
 `instructions` emits prompt-ready JSON with a short operating procedure and the plan commands from the same executable capability registry. Without `--with-map`, it labels the registry as an upper bound; piping current Map capabilities through `--with-map=-` resolves the exact installed intersection. Hosts can include this output in a coding agent's context instead of maintaining a second, drifting list of executable refactors.
 
@@ -98,7 +130,9 @@ The guidance keeps the boundary explicit: Map proposes a versioned plan, agent-e
 
 `class_removal_plan` deletes exactly one whole file: the plan must be `safe` (no blockers, blind spots or stale evidence), publish no edits or moves, and name the single owned source file with its hash. Apply re-proves the hash, the target's sole declaration and the absence of incoming Map evidence before the file is moved aside, hash-checked and discarded; verify requires the file and class to be gone from a rebuilt Map.
 
-Executable contracts (all `@1.0`): `method|function|class|property|class_constant|parameter_rename_plan`, `class_move_plan`, `method_move_plan`, `method_copy_plan`, `method_scaffold_plan`, `method_removal_plan`, `property_removal_plan`, `class_constant_removal_plan`, `class_removal_plan`, and the caller-authored, Map-free `source_edit_plan` (see [Direct edits](#direct-edits-quick-fixes-without-a-map)).
+Executable contracts (all `@1.0`): `method|function|class|property|class_constant|parameter_rename_plan`, `class_move_plan`, `method_move_plan`, `method_copy_plan`, `method_scaffold_plan`, `method_removal_plan`, `property_removal_plan`, `class_constant_removal_plan`, `class_scaffold_plan`, `class_removal_plan`, and the caller-authored, Map-free `source_edit_plan` (see [Direct edits](#direct-edits-quick-fixes-without-a-map)).
+
+`class_scaffold_plan` creates exactly one new file through the same all-or-nothing `FileTransaction` as direct edits: the plan must be `safe`, publish one `file_creation` edit and no moves, and the file must be a PHP open tag, optional `declare`, an optional `namespace`, `use` imports and exactly one class, interface, trait or enum named as planned (nothing executable at the top level, checked with the PHP tokenizer). Apply re-proves provenance, that the Map does not already declare the class and that the destination path is free (not even a dangling link) with no symlinked parent leaving the project root; the content is staged and `php -l` checked, and a failure removes the file and the directories it created. `verify` requires the file to hold exactly the planned bytes, the observed changed files to be exactly that path and the rebuilt Map to index it. For a new file whose content you author yourself, a `source_edit_plan` `creates` entry is the lighter route; the scaffold plan is for a Map-proven, PSR-4-placed declaration.
 
 `method_copy_plan` and `method_scaffold_plan` are executable only when Map publishes a `safe` plan with empty blind-spot, stale and blocker evidence. A copy that refers to `$this`, `self` or `static` across class ownership is `review_required`, so agent-edit refuses it rather than copying behavior it cannot prove. Both contracts preserve Map's exact insertions and need a PHPStan-backed Map; they do not permit a host to invent a method body or patch the plan by hand.
 

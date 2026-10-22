@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace voku\AgentEdit\Plan;
 
 use RuntimeException;
+use voku\AgentEdit\Failure\EditFailure;
+use voku\AgentEdit\Failure\FailureCode;
 use voku\AgentMap\Index\AgentMapIndex;
 use voku\AgentMap\Index\AnalysisFingerprint;
 
@@ -26,7 +28,7 @@ final readonly class RenamePlanProvenanceEvidence
         $backend = $data['backend'] ?? null;
         $fingerprint = $data['analysis_fingerprint'] ?? null;
         if (!is_string($mapDigest) || !preg_match('/\Asha256:[a-f0-9]{64}\z/D', $mapDigest)) {
-            throw new RuntimeException('Rename plan does not match the current map identity; rebuild and re-plan.');
+            throw new EditFailure('Rename plan does not match the current map identity; rebuild and re-plan.', FailureCode::PlanMalformed);
         }
         if (!is_string($backend) || $backend === '') {
             throw new RuntimeException('Rename plan provenance requires a backend.');
@@ -42,14 +44,14 @@ final readonly class RenamePlanProvenanceEvidence
     public function assertMatches(AgentMapIndex $map, bool $requiresPhpStan): void
     {
         if ($requiresPhpStan && !str_ends_with($map->backend, '+phpstan')) {
-            throw new RuntimeException('This rename plan requires a PHPStan-backed current map.');
+            throw new EditFailure('This rename plan requires a PHPStan-backed current map.', FailureCode::MapBackendUnsupported);
         }
         if (
             $this->mapDigest !== $map->mapDigest()
             || $this->backend !== $map->backend
             || $this->analysisFingerprint->toArray() !== $map->fingerprint?->toArray()
         ) {
-            throw new RuntimeException('Rename plan does not match the current map identity; rebuild and re-plan.');
+            throw new EditFailure('Rename plan does not match the current map identity; rebuild and re-plan.', FailureCode::EvidenceStale);
         }
     }
 }

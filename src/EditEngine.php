@@ -9,6 +9,10 @@ use HelgeSverre\Toon\Toon;
 use InvalidArgumentException;
 use JsonException;
 use RuntimeException;
+use voku\AgentEdit\Failure\EditFailure;
+use voku\AgentEdit\Failure\FailureCode;
+use voku\AgentEdit\Failure\InvalidInputFailure;
+use voku\AgentEdit\Preview\ChangePreview;
 use Throwable;
 use voku\AgentEdit\Apply\EditResult;
 use voku\AgentEdit\Apply\FileOperation;
@@ -154,10 +158,12 @@ final readonly class EditEngine
         $after = null;
         $failure = null;
         $manifestBefore = null;
+        $preview = ['changes' => [], 'diff' => ''];
 
         if ($request->dryRun) {
             $before = $snapshotter->capture($request->repositoryRoot);
             $prepared = $applier->preflight($plan, $map, $request->mapRoot);
+            $preview = ChangePreview::fromPreflight($prepared, $request->mapRoot);
             $result = new EditResult(
                 status: 'prepared',
                 exitCode: 0,
@@ -192,6 +198,12 @@ final readonly class EditEngine
                                 foreach ($prepared['final_paths'] as $source => $final) {
                                     if ($source !== $final) {
                                         $publicationPaths[] = substr(str_replace('\\', '/', $final), strlen($root) + 1);
+                                    }
+                                }
+                                // A created file is absent from the old Map; its absence is observed before it appears.
+                                foreach (array_keys($prepared['files']) as $candidate) {
+                                    if (!isset($prepared['source_hashes'][$candidate]) && !is_file($candidate)) {
+                                        $publicationPaths[] = substr(str_replace('\\', '/', $candidate), strlen($root) + 1);
                                     }
                                 }
                                 $manifestBefore = MapManifestEvidence::capture($map, $request->mapRoot, $publicationPaths);
@@ -259,7 +271,7 @@ final readonly class EditEngine
                     'model_input_tokens' => 0,
                     'model_tool_calls' => 0,
                 ],
-            ] + $observed));
+            ] + $observed + ($request->dryRun ? ['planned_changes' => $preview['changes']] : [])));
         } catch (Throwable $writeFailure) {
             // The apply outcome stays the primary signal: a failed attempt's real error is never replaced by the
             // receipt problem, and a published edit without a receipt is reported as exactly that.
@@ -280,6 +292,9 @@ final readonly class EditEngine
             $receiptPath,
             (string) ($plan['type'] ?? ''),
             (string) ($plan['target_id'] ?? ''),
+            $preview['changes'],
+            $preview['diff'],
+            $changedFiles,
         );
 
         if ($failure !== null) {
@@ -305,10 +320,12 @@ final readonly class EditEngine
         $before = null;
         $after = null;
         $failure = null;
+        $preview = ['changes' => [], 'diff' => ''];
 
         if ($request->dryRun) {
             $before = $snapshotter->capture($request->repositoryRoot);
             $prepared = $applier->preflight($plan, $request->repositoryRoot);
+            $preview = ChangePreview::fromPreflight($prepared, $request->repositoryRoot);
             $result = new EditResult(
                 status: 'prepared',
                 exitCode: 0,
@@ -406,7 +423,7 @@ final readonly class EditEngine
                 ],
                 'changed_files' => $changedFiles,
                 'changed_files_source' => $before->available && $after->available ? 'git_status_diff' : 'unavailable',
-            ] + $direct));
+            ] + $direct + ($request->dryRun ? ['planned_changes' => $preview['changes']] : [])));
         } catch (Throwable $writeFailure) {
             if ($failure !== null) {
                 throw $failure;
@@ -425,6 +442,9 @@ final readonly class EditEngine
             $receiptPath,
             (string) ($plan['type'] ?? ''),
             (string) ($plan['target_id'] ?? ''),
+            $preview['changes'],
+            $preview['diff'],
+            $changedFiles,
         );
         if ($failure !== null) {
             throw $failure;
@@ -628,7 +648,15 @@ final readonly class EditEngine
         $version = $plan['contract_version'] ?? null;
         $capability = is_string($type) ? $this->capabilities->find($type) : null;
         if ($capability === null || !is_string($version) || !in_array($version, $capability->contractVersions, true)) {
-            throw new InvalidArgumentException('Unsupported plan type or contract version; see `agent-edit capabilities`.');
+            throw new InvalidInputFailure(
+                sprintf(
+                    'Unsupported plan type or contract version (got %s@%s); see `agent-edit capabilities`.',
+                    is_string($type) ? $type : 'none',
+                    is_string($version) ? $version : 'none',
+                ),
+                FailureCode::PlanUnsupported,
+                ['plan_type' => is_string($type) ? $type : null, 'contract_version' => is_string($version) ? $version : null],
+            );
         }
 
         return $capability;
@@ -661,11 +689,15 @@ final readonly class EditEngine
     /** @return array<string, mixed> */
     private function decodePlan(string $path, string $raw): array
     {
-        $decoded = str_ends_with(strtolower($path), '.toon')
-            ? Toon::decode($raw)
-            : json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+        try {
+            $decoded = str_ends_with(strtolower($path), '.toon')
+                ? Toon::decode($raw)
+                : json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+        } catch (Throwable $exception) {
+            throw new EditFailure('Refactor plan is not valid ' . (str_ends_with(strtolower($path), '.toon') ? 'TOON' : 'JSON') . ' (' . $path . '): ' . $exception->getMessage(), FailureCode::PlanMalformed, ['path' => $path], $exception);
+        }
         if (!is_array($decoded)) {
-            throw new RuntimeException('Refactor plan document must decode to an object: ' . $path);
+            throw new EditFailure('Refactor plan document must decode to an object: ' . $path, FailureCode::PlanMalformed, ['path' => $path]);
         }
 
         return $decoded;
@@ -698,7 +730,7 @@ final readonly class EditEngine
         $candidate = str_starts_with($path, '/') ? $path : $root . '/' . $path;
         $real = realpath($candidate);
         if (!is_string($real) || ($directory ? !is_dir($real) : !is_file($real))) {
-            throw new RuntimeException('Refactor verify ' . $label . ' not found: ' . $path);
+            throw new EditFailure('Refactor verify ' . $label . ' not found: ' . $path, FailureCode::InputNotFound, ['path' => $path]);
         }
         $root = rtrim(str_replace('\\', '/', $root), '/');
         $real = str_replace('\\', '/', $real);

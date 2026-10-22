@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace voku\AgentEdit\Verify;
 
+use voku\AgentEdit\Failure\EditFailure;
+use voku\AgentEdit\Failure\FailureCode;
 use voku\AgentEdit\Plan\RenamePlanEditEvidence;
 use voku\AgentEdit\Plan\RenamePlanDocument;
 use voku\AgentEdit\Plan\EditMovePlanEvidence;
@@ -79,10 +81,10 @@ final readonly class EditMovePlanVerifier implements BundleVerifier
 
         $map = $this->withRuntimeRoot($this->reader->read($mapIndex), $mapRoot);
         if ($map->staleEntries() !== []) {
-            throw new RuntimeException('Current agent-map evidence is stale after refactor execution.');
+            throw new EditFailure('Current agent-map evidence is stale after refactor execution.', FailureCode::EvidenceStale);
         }
         if ($document->requiresPhpStan() && !str_ends_with($map->backend, '+phpstan')) {
-            throw new RuntimeException('Current refactor verification requires a PHPStan-backed map for this plan contract.');
+            throw new EditFailure('Current refactor verification requires a PHPStan-backed map for this plan contract.', FailureCode::MapBackendUnsupported);
         }
 
         $viaManifest = ($execution['changed_files_source'] ?? null) === MapManifestEvidence::SOURCE;
@@ -159,7 +161,7 @@ final readonly class EditMovePlanVerifier implements BundleVerifier
             $searchCursor = 0;
             $expectedOccurrences = [];
             foreach ($edits as $edit) {
-                $removedLength = $edit->endFilePos - $edit->startFilePos + 1;
+                $removedLength = $edit->replacedLength();
                 if ($edit->replacement === '') {
                     // A same-file move re-inserts the removed text in the file; only occurrences the plan itself
                     // does not put back count as "still present".
@@ -215,6 +217,10 @@ final readonly class EditMovePlanVerifier implements BundleVerifier
             }
         }
 
+        if ($document instanceof MethodInsertionPlanDocument) {
+            $this->assertInsertedMethodIsInTheMap($document, $map);
+        }
+
         return [
             'schema_version' => '1.0',
             'kind' => match ($document->planType()) {
@@ -245,6 +251,27 @@ final readonly class EditMovePlanVerifier implements BundleVerifier
                 'moves' => 'passed',
             ],
         ] + ($viaManifest ? ['scope' => MapManifestEvidence::scope()] : []);
+    }
+
+    /** The text landing in the file is not enough: the rebuilt Map must declare the method on the destination class. */
+    private function assertInsertedMethodIsInTheMap(MethodInsertionPlanDocument $document, AgentMapIndex $map): void
+    {
+        $separator = (int) strrpos($document->destinationMethodId(), '::');
+        $destination = substr($document->destinationMethodId(), 0, $separator);
+        $method = substr($document->destinationMethodId(), $separator + 2);
+        $file = $map->file($this->relativePath($document->insertionPath()));
+        foreach ($file === null ? [] : $file->symbols as $symbol) {
+            if (ltrim($symbol->fqn, '\\') !== $destination) {
+                continue;
+            }
+            foreach ($symbol->methods as $declared) {
+                if (strcasecmp($declared->name, $method) === 0) {
+                    return;
+                }
+            }
+        }
+
+        throw new RuntimeException('Inserted method is missing from the rebuilt Map: ' . $document->destinationMethodId() . '.');
     }
 
     /** @param array<string, mixed> $plan */

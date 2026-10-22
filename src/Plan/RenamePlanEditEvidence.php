@@ -24,8 +24,12 @@ final readonly class RenamePlanEditEvidence
     ) {
     }
 
-    /** @param array<string, mixed> $data */
-    public static function fromArray(array $data, bool $allowEmptyReplacement = false): self
+    /**
+     * @param array<string, mixed> $data
+     * @param bool $allowInsertion accept a zero-length insertion (`expected` empty, start equal to end, the text inserted
+     *                             before the byte at that offset); only the insertion plan decoder opts in
+     */
+    public static function fromArray(array $data, bool $allowEmptyReplacement = false, bool $allowInsertion = false): self
     {
         $edit = new self(
             path: self::string($data, 'path'),
@@ -34,7 +38,7 @@ final readonly class RenamePlanEditEvidence
             endFilePos: self::integer($data, 'end_file_pos'),
             lineStart: self::integer($data, 'line_start'),
             lineEnd: self::integer($data, 'line_end'),
-            expected: self::string($data, 'expected'),
+            expected: self::string($data, 'expected', $allowInsertion),
             replacement: self::string($data, 'replacement', $allowEmptyReplacement),
             role: self::string($data, 'role'),
             symbolId: self::string($data, 'symbol_id'),
@@ -44,6 +48,9 @@ final readonly class RenamePlanEditEvidence
         if ($edit->startFilePos < 0 || $edit->endFilePos < $edit->startFilePos) {
             throw new RuntimeException('Rename plan edit contains an invalid byte range.');
         }
+        if ($edit->isInsertion() && ($edit->startFilePos !== $edit->endFilePos || $edit->replacement === '')) {
+            throw new RuntimeException('Plan insertion edit must name one offset and carry non-empty text.');
+        }
         if ($edit->lineStart < 1 || $edit->lineEnd < $edit->lineStart) {
             throw new RuntimeException('Rename plan edit contains an invalid line range.');
         }
@@ -52,6 +59,18 @@ final readonly class RenamePlanEditEvidence
         }
 
         return $edit;
+    }
+
+    /** A pure insertion replaces no bytes: `expected` is empty and the text goes before the byte at `startFilePos`. */
+    public function isInsertion(): bool
+    {
+        return $this->expected === '';
+    }
+
+    /** Number of source bytes this edit replaces; zero for an insertion. */
+    public function replacedLength(): int
+    {
+        return $this->isInsertion() ? 0 : $this->endFilePos - $this->startFilePos + 1;
     }
 
     /** @param array<string, mixed> $data */

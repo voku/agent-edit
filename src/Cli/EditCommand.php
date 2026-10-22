@@ -5,8 +5,9 @@ declare(strict_types=1);
 namespace voku\AgentEdit\Cli;
 
 use Closure;
-use InvalidArgumentException;
 use RuntimeException;
+use voku\AgentEdit\Failure\FailureCode;
+use voku\AgentEdit\Failure\InvalidInputFailure;
 use Throwable;
 use voku\AgentEdit\EditEngine;
 use voku\AgentEdit\Plan\SourceEditPlanDocument;
@@ -39,6 +40,11 @@ final readonly class EditCommand
         try {
             [$plan, $passThrough] = $this->plan($tokens);
         } catch (Throwable $exception) {
+            if (in_array('--format=json', $tokens, true)) {
+                echo FailureReport::encode(['schema_version' => '1.0', 'command' => 'edit', 'ok' => false, 'error' => FailureReport::describe($exception)]);
+
+                return 2;
+            }
             fwrite(STDERR, '[ERROR] ' . $exception->getMessage() . "\n");
 
             return 2;
@@ -63,16 +69,16 @@ final readonly class EditCommand
         $passThrough = [];
         for ($index = 0, $count = count($tokens); $index < $count; ++$index) {
             $token = $tokens[$index];
-            if (in_array($token, ['--all', '--allow-signature-change', '--dry-run'], true)) {
+            if (in_array($token, ['--all', '--allow-signature-change', '--dry-run', '--diff'], true)) {
                 $flags[$token] = true;
-                if ($token === '--dry-run') {
+                if ($token === '--dry-run' || $token === '--diff') {
                     $passThrough[] = $token;
                 }
                 continue;
             }
             if (!str_starts_with($token, '--')) {
                 if ($path !== null) {
-                    throw new InvalidArgumentException('agent-edit edit takes exactly one FILE; use `agent-edit apply -` with a plan for several edits (got extra: ' . $token . ').');
+                    throw new InvalidInputFailure('agent-edit edit takes exactly one FILE; use `agent-edit apply -` with a plan for several edits (got extra: ' . $token . ').', FailureCode::Usage);
                 }
                 $path = $token;
                 continue;
@@ -84,21 +90,21 @@ final readonly class EditCommand
             } else {
                 $name = $raw;
                 if (!array_key_exists($index + 1, $tokens)) {
-                    throw new InvalidArgumentException('Missing value for option --' . $name);
+                    throw new InvalidInputFailure('Missing value for option --' . $name, FailureCode::Usage);
                 }
                 $value = $tokens[++$index];
             }
-            if (!in_array($name, ['find', 'find-file', 'replace', 'replace-file', 'occurrence', 'sha256', 'task', 'output-dir', 'target'], true)) {
-                throw new InvalidArgumentException('Unknown option --' . $name . ' for `agent-edit edit`; see `agent-edit edit --help`.');
+            if (!in_array($name, ['find', 'find-file', 'replace', 'replace-file', 'occurrence', 'sha256', 'task', 'output-dir', 'target', 'format'], true)) {
+                throw new InvalidInputFailure('Unknown option --' . $name . ' for `agent-edit edit`; see `agent-edit edit --help`.', FailureCode::Usage);
             }
             if (isset($values[$name])) {
-                throw new InvalidArgumentException('Duplicate option --' . $name);
+                throw new InvalidInputFailure('Duplicate option --' . $name, FailureCode::Usage);
             }
             $values[$name] = $value;
         }
 
         if ($path === null || $path === '') {
-            throw new InvalidArgumentException('agent-edit edit requires the FILE to change (project-relative).');
+            throw new InvalidInputFailure('agent-edit edit requires the FILE to change (project-relative).', FailureCode::Usage);
         }
         $find = $this->text($values, 'find', 'find-file');
         $replace = $this->text($values, 'replace', 'replace-file');
@@ -106,7 +112,7 @@ final readonly class EditCommand
         $edit = ['path' => $this->relative($path), 'find' => $find, 'replace' => $replace];
         if (isset($values['occurrence'])) {
             if (preg_match('/\A[1-9][0-9]*\z/', $values['occurrence']) !== 1) {
-                throw new InvalidArgumentException('--occurrence must be a positive integer (1-based).');
+                throw new InvalidInputFailure('--occurrence must be a positive integer (1-based).', FailureCode::Usage);
             }
             $edit['occurrence'] = (int) $values['occurrence'];
         }
@@ -126,7 +132,7 @@ final readonly class EditCommand
         if (isset($flags['--allow-signature-change'])) {
             $plan['allow_signature_change'] = true;
         }
-        foreach (['task' => '--task', 'output-dir' => '--output-dir'] as $name => $option) {
+        foreach (['task' => '--task', 'output-dir' => '--output-dir', 'format' => '--format'] as $name => $option) {
             if (isset($values[$name])) {
                 $passThrough[] = $option . '=' . $values[$name];
             }
@@ -139,7 +145,7 @@ final readonly class EditCommand
     private function text(array $values, string $inline, string $file): string
     {
         if (isset($values[$inline]) === isset($values[$file])) {
-            throw new InvalidArgumentException(sprintf('Give exactly one of --%s (inline text) or --%s (read the text from a file).', $inline, $file));
+            throw new InvalidInputFailure(sprintf('Give exactly one of --%s (inline text) or --%s (read the text from a file).', $inline, $file), FailureCode::Usage);
         }
         if (isset($values[$inline])) {
             return $values[$inline];
@@ -164,7 +170,7 @@ final readonly class EditCommand
         $root = realpath($this->projectRoot);
         $root = is_string($root) ? rtrim(str_replace('\\', '/', $root), '/') . '/' : '';
         if ($root === '/' || !str_starts_with($path, $root)) {
-            throw new InvalidArgumentException('FILE must be inside the project root: ' . $path);
+            throw new InvalidInputFailure('FILE must be inside the project root: ' . $path, FailureCode::Usage);
         }
 
         return substr($path, strlen($root));
@@ -189,7 +195,9 @@ Options:
   --target LABEL            Plan target label. Default: edit:<FILE>.
   --task LABEL              Receipt label. Default: plan-<plan sha256 prefix>.
   --output-dir PATH         Receipt bundle. Default: .agent-edit/receipts/<label>
-  --dry-run                 Resolve and validate everything, write nothing.
+  --dry-run                 Resolve and validate everything, write nothing; lists the files it would change.
+  --diff                    With --dry-run: also print the unified diff.
+  --format=text|json        json prints exactly one document on stdout, also for a failure.
 
 Text from --find-file / --replace-file is used byte for byte, including a trailing newline: a file written with a
 trailing newline only matches text that is followed by one.
