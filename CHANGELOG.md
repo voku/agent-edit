@@ -22,6 +22,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Rename and move verification matched a rewritten token as a substring: renaming `greet` to `name` was "verified" by the `name` inside `$name` after the call site was reverted, although the code then called an undefined method. Identifier-shaped replacements now only count as whole identifiers, and a bare name never as part of a `$variable`.
 - Re-running `apply` into a bundle that records an applied plan overwrote its receipt with `runner_failed` while the old `passed` verification result stayed. Such a bundle is now never overwritten (also not by a dry run); any other bundle drops a stale verification result before a new receipt is written. `undo` likewise removes the verification result of the state it restored.
 - Verifying an edit of a file Git ignores no longer fails with "changed_files do not match plan scope": ignored plan files are recorded at apply time, proven by digest and reported in `git_ignored_files_proven_by_digest_only`.
+- `apply --map-root` outside the project root was accepted, producing a bundle `verify` can never check; it is now refused before any write. An absolute `--output-dir` named through a symlinked directory (a shell's `$PWD`, macOS `/tmp`) is resolved before the inside-root check instead of being refused.
+- A missing plan file reported `Refactor refactor plan not found`; it now reads `Plan file not found` (and `Map index not found`, `Map root not found`).
+- The top-level help listed `verify` without `--accept-residue`, and `verify --help` omitted class removal plans and the `use` import residue check.
 
 ## 0.4.4 - 2026-10-09
 
