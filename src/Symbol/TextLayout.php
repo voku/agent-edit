@@ -256,7 +256,7 @@ final readonly class TextLayout
             $line += $breaks;
         }
 
-        return [$modes, $markers];
+        return [array_values($modes), $markers];
     }
 
     private static function commonPrefix(string $left, string $right): string
