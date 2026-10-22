@@ -32,6 +32,7 @@ final class CapabilitiesTest extends TestCase
             'method_removal_plan',
             'property_removal_plan',
             'class_constant_removal_plan',
+            'class_scaffold_plan',
             'class_removal_plan',
             'source_edit_plan',
         ], $types);
@@ -83,7 +84,7 @@ final class CapabilitiesTest extends TestCase
         $decoded = json_decode($output, true, 512, JSON_THROW_ON_ERROR);
         self::assertSame('agent_edit_coding_agent_instructions', $decoded['type']);
         self::assertSame('registry_only', $decoded['capability_resolution']);
-        self::assertCount(15, $decoded['plans']);
+        self::assertCount(16, $decoded['plans']);
         self::assertSame('agent-map rename-plan', $decoded['plans'][0]['agent_map_command']);
         self::assertSame('agent-map function-rename-plan', $decoded['plans'][1]['agent_map_command']);
         self::assertSame('must_match_installed_map', $decoded['plans'][0]['resolution']);
@@ -172,9 +173,9 @@ final class CapabilitiesTest extends TestCase
         $result = (new CapabilityRegistry())->intersect($payload);
 
         self::assertSame([], $result['executable_not_planned'], 'agent-edit executes a contract the installed agent-map no longer plans.');
-        self::assertCount(14, $result['executable']);
+        self::assertCount(15, $result['executable']);
         $plannedOnly = array_map(static fn (array $row): string => $row['plan_type'], $result['planned_not_executable']);
-        self::assertSame(['class_scaffold_plan'], $plannedOnly, 'Every planned mutation contract except file creation must be executable through agent-edit.');
+        self::assertSame([], $plannedOnly, 'Every planned mutation contract the installed Map publishes must be executable through agent-edit.');
     }
 
     public function testRegistryIsTheOnlyPlanTypeListOutsideWireDecoders(): void

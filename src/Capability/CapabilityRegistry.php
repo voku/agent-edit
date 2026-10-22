@@ -8,6 +8,7 @@ use InvalidArgumentException;
 use voku\AgentEdit\Apply\ClassConstantRemovalPlanApplier;
 use voku\AgentEdit\Apply\ClassMovePlanApplier;
 use voku\AgentEdit\Apply\ClassRemovalPlanApplier;
+use voku\AgentEdit\Apply\ClassScaffoldPlanApplier;
 use voku\AgentEdit\Apply\MethodMovePlanApplier;
 use voku\AgentEdit\Apply\MethodInsertionPlanApplier;
 use voku\AgentEdit\Apply\MethodRemovalPlanApplier;
@@ -16,6 +17,7 @@ use voku\AgentEdit\Apply\RenamePlanApplier;
 use voku\AgentEdit\Apply\SourceEditPlanApplier;
 use voku\AgentEdit\Verify\ClassConstantRemovalVerifier;
 use voku\AgentEdit\Verify\ClassRemovalVerifier;
+use voku\AgentEdit\Verify\ClassScaffoldVerifier;
 use voku\AgentEdit\Verify\EditMovePlanVerifier;
 use voku\AgentEdit\Verify\MethodRemovalVerifier;
 use voku\AgentEdit\Verify\PropertyRemovalVerifier;
@@ -53,6 +55,7 @@ final readonly class CapabilityRegistry
         $capabilities[] = new PlanCapability('method_removal_plan', ['1.0'], true, false, 'method-removal-plan', MethodRemovalPlanApplier::class, MethodRemovalVerifier::class);
         $capabilities[] = new PlanCapability('property_removal_plan', ['1.0'], true, false, 'property-removal-plan', PropertyRemovalPlanApplier::class, PropertyRemovalVerifier::class);
         $capabilities[] = new PlanCapability('class_constant_removal_plan', ['1.0'], true, false, 'class-constant-removal-plan', ClassConstantRemovalPlanApplier::class, ClassConstantRemovalVerifier::class);
+        $capabilities[] = new PlanCapability('class_scaffold_plan', ['1.0'], false, false, 'class-scaffold-plan', ClassScaffoldPlanApplier::class, ClassScaffoldVerifier::class);
         $capabilities[] = new PlanCapability('class_removal_plan', ['1.0'], true, false, 'class-removal-plan', ClassRemovalPlanApplier::class, ClassRemovalVerifier::class);
 
         // Caller-authored direct edits: the only evidence is the current source, so no Map is read or required.

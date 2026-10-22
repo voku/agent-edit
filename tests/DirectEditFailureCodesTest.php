@@ -149,7 +149,11 @@ final class DirectEditFailureCodesTest extends TestCase
         self::assertSame('src/Calc.php', $error['details']['path']);
     }
 
-    /** @dataProvider malformedPlans */
+    /**
+     * @dataProvider malformedPlans
+     *
+     * @param array<string, mixed> $plan
+     */
     public function testAPlanThatBreaksItsContractIsPlanMalformed(array $plan, string $fragment): void
     {
         $error = $this->error(['apply', '-', '--format=json'], json_encode($plan, JSON_THROW_ON_ERROR));
@@ -186,6 +190,7 @@ final class DirectEditFailureCodesTest extends TestCase
 
         self::assertSame(0, $run['exit'], $run['stdout']);
         self::assertIsArray($run['json']);
+        self::assertArrayHasKey('planned_changes', $run['json']);
         self::assertSame([['path' => 'src/Calc.php', 'change' => 'modified', 'lines_added' => 1, 'lines_removed' => 1]], $run['json']['planned_changes']);
         self::assertSame('apply', $run['json']['next_action']);
         self::assertSame(self::CALC, $this->read('src/Calc.php'));
@@ -199,6 +204,7 @@ final class DirectEditFailureCodesTest extends TestCase
         $run = $this->cli(['apply', '-', '--dry-run', '--diff', '--format=json'], $plan);
 
         self::assertSame(0, $run['exit'], $run['stdout']);
+        self::assertIsArray($run['json']);
         self::assertSame([['path' => 'tests/CalcTest.php', 'change' => 'created', 'lines_added' => 3, 'lines_removed' => 0]], $run['json']['planned_changes']);
         self::assertSame("<?php\n\n// test\n", UnifiedPatch::apply('', $run['json']['diff']));
         self::assertFileDoesNotExist($this->root . '/tests/CalcTest.php');

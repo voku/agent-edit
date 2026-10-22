@@ -199,6 +199,12 @@ final readonly class EditEngine
                                         $publicationPaths[] = substr(str_replace('\\', '/', $final), strlen($root) + 1);
                                     }
                                 }
+                                // A created file is absent from the old Map; its absence is observed before it appears.
+                                foreach (array_keys($prepared['files']) as $candidate) {
+                                    if (!isset($prepared['source_hashes'][$candidate]) && !is_file($candidate)) {
+                                        $publicationPaths[] = substr(str_replace('\\', '/', $candidate), strlen($root) + 1);
+                                    }
+                                }
                                 $manifestBefore = MapManifestEvidence::capture($map, $request->mapRoot, $publicationPaths);
                             }
                             $result = $applier->apply($plan, $map, $request->mapRoot);
