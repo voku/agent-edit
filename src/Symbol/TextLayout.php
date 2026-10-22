@@ -82,20 +82,26 @@ final readonly class TextLayout
      * A line that starts inside a quoted string literal is string content, not code layout: it is neither dedented nor
      * indented (and does not count towards the common indentation), so re-indenting never changes a value. Heredoc and
      * nowdoc bodies are indented together with their closing marker, which PHP removes again.
+     *
+     * With `$unit` (one level of the target file's indentation, see {@see indentUnit()}) the code's own nesting is
+     * written in that style too: code indented with four spaces lands as tabs in a tab-indented file instead of mixing
+     * both. Heredoc and nowdoc bodies are never converted.
      */
-    public static function reindent(string $code, string $indent, string $eol, bool $indentFirstLine = false): string
+    public static function reindent(string $code, string $indent, string $eol, bool $indentFirstLine = false, ?string $unit = null): string
     {
         $normalized = str_replace(["\r\n", "\r"], "\n", $code);
         $lines = explode("\n", $normalized);
-        $verbatim = self::linesInsideStrings($normalized);
+        [$modes, $markers] = self::lineModes($normalized);
 
+        $skipped = 0; // leading blank lines removed: `$markers` are indexed by the original lines
         while ($lines !== [] && trim($lines[0]) === '') {
             array_shift($lines);
-            $verbatim = array_slice($verbatim, 1);
+            $modes = array_slice($modes, 1);
+            ++$skipped;
         }
         while ($lines !== [] && trim($lines[count($lines) - 1]) === '') {
             array_pop($lines);
-            array_pop($verbatim);
+            array_pop($modes);
         }
         if ($lines === []) {
             return '';
@@ -103,7 +109,7 @@ final readonly class TextLayout
 
         $common = null;
         foreach ($lines as $index => $line) {
-            if (trim($line) === '' || $verbatim[$index]) {
+            if (trim($line) === '' || $modes[$index] === self::STRING) {
                 continue;
             }
             $leading = substr($line, 0, strspn($line, " \t"));
@@ -111,37 +117,111 @@ final readonly class TextLayout
         }
         $common ??= '';
 
+        $codeUnit = $unit === null ? null : self::codeUnit($lines, $modes, strlen($common));
+        $convert = $unit !== null && $codeUnit !== null && $codeUnit !== $unit;
+
         $result = [];
         foreach ($lines as $index => $line) {
-            if ($verbatim[$index]) {
+            if ($modes[$index] === self::STRING) {
                 $result[] = $line;
                 continue;
             }
-            if (trim($line) === '') {
+            if (trim($line) === '' && $modes[$index] === self::CODE) {
                 $result[] = '';
                 continue;
             }
             $line = substr($line, strlen($common));
+            if ($convert && $modes[$index] === self::CODE) {
+                $line = self::convertIndentation($line, (string) $codeUnit, (string) $unit);
+            } elseif ($convert && isset($markers[$index + $skipped])) {
+                $line = self::convertHeredocLine($line, substr($lines[$markers[$index + $skipped] - $skipped], strlen($common)), (string) $codeUnit, (string) $unit);
+            }
             $result[] = ($index === 0 && !$indentFirstLine ? '' : $indent) . $line;
         }
 
         return implode($eol, $result);
     }
 
+    private const CODE = 0;
+    private const STRING = 1;
+    private const HEREDOC = 2;
+
     /**
-     * For every line of `$code` (split on "\n"): whether it starts inside a quoted string literal, that is a
-     * single-quoted, double-quoted or backtick string that continues over a line break. Heredoc and nowdoc bodies are
-     * not included; their indentation is governed by the closing marker.
+     * One level of the code's own indentation after the common part is removed: a tab when any code line is indented
+     * with one, else the smallest space indentation (comment continuation lines ` * text` are ignored). Null when no
+     * line is indented.
      *
-     * @return list<bool>
+     * @param list<string> $lines
+     * @param list<int> $modes
      */
-    private static function linesInsideStrings(string $code): array
+    private static function codeUnit(array $lines, array $modes, int $common): ?string
+    {
+        $smallest = null;
+        foreach ($lines as $index => $line) {
+            if ($modes[$index] !== self::CODE) {
+                continue;
+            }
+            $line = substr($line, $common);
+            if (trim($line) === '' || ltrim($line)[0] === '*') {
+                continue;
+            }
+            $leading = substr($line, 0, strspn($line, " \t"));
+            if ($leading === '') {
+                continue;
+            }
+            if ($leading[0] === "\t") {
+                return "\t";
+            }
+            $smallest = $smallest === null ? strlen($leading) : min($smallest, strlen($leading));
+        }
+
+        return $smallest === null ? null : str_repeat(' ', $smallest);
+    }
+
+    /**
+     * A heredoc body line starts with the closing marker's indentation, which PHP removes; only that prefix is layout
+     * (the rest is content) and, like the marker's own, it must not mix tabs and spaces.
+     */
+    private static function convertHeredocLine(string $line, string $markerLine, string $codeUnit, string $unit): string
+    {
+        $markerIndent = substr($markerLine, 0, strspn($markerLine, " \t"));
+        if ($markerIndent === '' || !str_starts_with($line, $markerIndent)) {
+            return $line;
+        }
+
+        return self::convertIndentation($markerIndent, $codeUnit, $unit) . substr($line, strlen($markerIndent));
+    }
+
+    /** Rewrites the leading whole levels of `$codeUnit` as `$unit`; alignment spaces beyond them stay. */
+    private static function convertIndentation(string $line, string $codeUnit, string $unit): string
+    {
+        $length = strlen($codeUnit);
+        $levels = 0;
+        while (substr($line, $levels * $length, $length) === $codeUnit) {
+            ++$levels;
+        }
+
+        return str_repeat($unit, $levels) . substr($line, $levels * $length);
+    }
+
+    /**
+     * For every line of `$code` (split on "\n"): CODE, STRING when it starts inside a quoted string literal (a
+     * single-quoted, double-quoted or backtick string that continues over a line break) or HEREDOC when it starts
+     * inside a heredoc or nowdoc, whose indentation is governed by its closing marker.
+     *
+     * @return array{list<int>, array<int, int>} the modes and, for every line of a simple (not nested) heredoc body, the
+     *         line of its closing marker
+     */
+    private static function lineModes(string $code): array
     {
         $lines = substr_count($code, "\n") + 1;
-        $inside = array_fill(0, $lines, false);
+        $modes = array_fill(0, $lines, self::CODE);
         if (!str_contains($code, "\n") || !class_exists(\PhpToken::class)) {
-            return $inside;
+            return [$modes, []];
         }
+        /** @var array<int, int> $markers */
+        $markers = [];
+        $bodyStart = null;
 
         $line = 0;
         $heredocDepth = 0;
@@ -154,25 +234,29 @@ final readonly class TextLayout
             }
             if ($token->id === T_START_HEREDOC) {
                 ++$heredocDepth; // a heredoc can nest in another one's `{$a[<<<X ... X]}` interpolation
+                $bodyStart = $heredocDepth === 1 ? $line + 1 : null;
             } elseif ($token->id === T_END_HEREDOC) {
+                if ($heredocDepth === 1 && $bodyStart !== null) {
+                    for ($body = $bodyStart; $body <= $line && $body < $lines; ++$body) {
+                        $markers[$body] = $line;
+                    }
+                }
                 $heredocDepth = max(0, $heredocDepth - 1);
             } elseif ($heredocDepth === 0 && ($token->text === '"' || $token->text === '`')) {
                 $quoted = !$quoted;
             }
 
             $breaks = substr_count($token->text, "\n");
-            if ($breaks > 0 && $heredocDepth === 0 && $token->id !== T_START_HEREDOC) {
-                $spansLines = $quoted || $token->id === T_CONSTANT_ENCAPSED_STRING || $token->id === T_ENCAPSED_AND_WHITESPACE;
-                if ($spansLines) {
-                    for ($offset = 1; $offset <= $breaks && $line + $offset < $lines; ++$offset) {
-                        $inside[$line + $offset] = true;
-                    }
+            if ($breaks > 0) {
+                $mode = $heredocDepth > 0 ? self::HEREDOC : (($quoted || $token->id === T_CONSTANT_ENCAPSED_STRING || $token->id === T_ENCAPSED_AND_WHITESPACE) ? self::STRING : self::CODE);
+                for ($offset = 1; $offset <= $breaks && $line + $offset < $lines; ++$offset) {
+                    $modes[$line + $offset] = $mode;
                 }
             }
             $line += $breaks;
         }
 
-        return array_values($inside);
+        return [$modes, $markers];
     }
 
     private static function commonPrefix(string $left, string $right): string

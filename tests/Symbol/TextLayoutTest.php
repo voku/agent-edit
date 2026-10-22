@@ -68,6 +68,58 @@ final class TextLayoutTest extends TestCase
         self::assertSame(self::evaluate($code), self::evaluate($result));
     }
 
+    public function testSpaceIndentedCodeLandsAsTabsInATabIndentedFile(): void
+    {
+        $code = "public function f(array \$a): int\n{\n    if (\$a) {\n        return [\n            1,\n        ][0];\n    }\n\n    return 0;\n}";
+
+        self::assertSame(
+            "\tpublic function f(array \$a): int\n\t{\n\t\tif (\$a) {\n\t\t\treturn [\n\t\t\t\t1,\n\t\t\t][0];\n\t\t}\n\n\t\treturn 0;\n\t}",
+            TextLayout::reindent($code, "\t", "\n", true, "\t"),
+        );
+    }
+
+    public function testTabIndentedCodeLandsAsSpacesInASpaceIndentedFile(): void
+    {
+        self::assertSame(
+            "    function f(): int\n    {\n        return 1;\n    }",
+            TextLayout::reindent("function f(): int\n{\n\treturn 1;\n}", '    ', "\n", true, '    '),
+        );
+        self::assertSame(
+            "  function f(): int\n  {\n    return 1;\n  }",
+            TextLayout::reindent("function f(): int\n{\n    return 1;\n}", '  ', "\n", true, '  '),
+            'a four-space code level becomes one two-space level',
+        );
+    }
+
+    public function testAlignmentAndCommentContinuationLinesKeepTheirSpaces(): void
+    {
+        $code = "/**\n * Doc.\n */\nfunction f(int \$a,\n           int \$b): int\n{\n    return \$a\n        + \$b;\n}";
+
+        $result = TextLayout::reindent($code, "\t", "\n", true, "\t");
+
+        self::assertStringContainsString("\t/**\n\t * Doc.\n\t */\n", $result);
+        self::assertStringContainsString("\n\t\t\t   int \$b): int\n", $result, 'the 11 alignment spaces keep their column: two levels and three spaces');
+        self::assertStringContainsString("\n\t\treturn \$a\n\t\t\t+ \$b;\n", $result);
+    }
+
+    public function testNoConversionWithoutAUnitOrWithTheSameStyle(): void
+    {
+        $code = "function f(): int\n{\n    return 1;\n}";
+
+        self::assertSame("function f(): int\n{\n    return 1;\n}", TextLayout::reindent($code, '', "\n"));
+        self::assertSame("function f(): int\n{\n    return 1;\n}", TextLayout::reindent($code, '', "\n", false, '    '));
+    }
+
+    public function testHeredocPrefixIsConvertedAndItsContentIsNot(): void
+    {
+        $code = "function f(): string\n{\n    return <<<TXT\n    keep\n      this\n    TXT;\n}";
+
+        $result = TextLayout::reindent($code, "\t", "\n", true, "\t");
+
+        self::assertSame("\tfunction f(): string\n\t{\n\t\treturn <<<TXT\n\t\tkeep\n\t\t  this\n\t\tTXT;\n\t}", $result);
+        self::assertSame("keep\n  this", self::evaluate($result));
+    }
+
     public function testLineBreaksInsideAStringFollowTheFileLineEnding(): void
     {
         self::assertSame(
@@ -77,29 +129,34 @@ final class TextLayoutTest extends TestCase
     }
 
     /**
-     * @return iterable<string, array{string, list<string>}>
+     * @return iterable<string, array{string}>
      */
     public static function valuePreservingSnippets(): iterable
     {
-        $any = ['', '    ', "\t\t"];
-        yield 'single quoted' => ["function f(): string\n{\n    return 'a\n  b\n\tc';\n}", $any];
-        yield 'double quoted' => ["function f(): string\n{\n    \$x = 'v';\n    return \"a \$x\n  b {\$x}\n c\";\n}", $any];
-        yield 'backtick in a comment is not a string' => ["function f(): string\n{\n    // `not a string\n    return 'ok';\n}", $any];
-        // A heredoc marker indented with tabs over space-indented code would mix both in one marker; PHP refuses that.
-        yield 'string after a heredoc' => ["function f(): string\n{\n    \$h = <<<TXT\n    in\n    TXT;\n\n    return \$h . 'a\n b';\n}", ['', '    ']];
-        yield 'heredoc nested in a heredoc interpolation' => ["function f(): string\n{\n    \$a = ['key' => 'v'];\n    return <<<OUTER\n    before\n    {\$a[<<<INNER\n    key\n    INNER]}\n    after\n    OUTER;\n}", ['', '    ']];
-        yield 'escaped quotes' => ["function f(): string\n{\n    return 'it\\'s\n  here' . \"say \\\"hi\\\"\n  now\";\n}", $any];
+        yield 'single quoted' => ["function f(): string\n{\n    return 'a\n  b\n\tc';\n}"];
+        yield 'double quoted' => ["function f(): string\n{\n    \$x = 'v';\n    return \"a \$x\n  b {\$x}\n c\";\n}"];
+        yield 'backtick in a comment is not a string' => ["function f(): string\n{\n    // `not a string\n    return 'ok';\n}"];
+        yield 'string after a heredoc' => ["function f(): string\n{\n    \$h = <<<TXT\n    in\n      deeper\n    TXT;\n\n    return \$h . 'a\n b';\n}"];
+        yield 'heredoc nested in a heredoc interpolation' => ["function f(): string\n{\n    \$a = ['key' => 'v'];\n    return <<<OUTER\n    before\n    {\$a[<<<INNER\n    key\n    INNER]}\n    after\n    OUTER;\n}"];
+        yield 'escaped quotes' => ["function f(): string\n{\n    return 'it\\'s\n  here' . \"say \\\"hi\\\"\n  now\";\n}"];
     }
 
-    /** @param list<string> $indents */
     #[DataProvider('valuePreservingSnippets')]
-    public function testReindentNeverChangesWhatTheCodeEvaluatesTo(string $code, array $indents): void
+    public function testReindentNeverChangesWhatTheCodeEvaluatesTo(string $code): void
     {
-        foreach ($indents as $indent) {
+        $targets = [['', null], ['    ', null], ['', "\t"], ["\t\t", "\t"], ['    ', '    '], ['  ', '  ']];
+        if (!str_contains($code, '<<<')) {
+            $targets[] = ["\t\t", null]; // a heredoc marker indented with tabs over space-indented code would mix both
+        }
+        if (substr_count($code, '<<<') > 1) {
+            // Nested heredocs keep their prefix as written (they are refused by the syntax check when that mixes styles).
+            $targets = [['', null], ['    ', null], ['    ', '    ']];
+        }
+        foreach ($targets as [$indent, $unit]) {
             self::assertSame(
                 self::evaluate($code),
-                self::evaluate(TextLayout::reindent($code, $indent, "\n")),
-                sprintf('indent %s', var_export($indent, true)),
+                self::evaluate(TextLayout::reindent($code, $indent, "\n", false, $unit)),
+                sprintf('indent %s, unit %s', var_export($indent, true), var_export($unit, true)),
             );
         }
     }

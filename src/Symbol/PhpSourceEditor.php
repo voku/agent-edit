@@ -63,7 +63,7 @@ final readonly class PhpSourceEditor
         $indent = $layout->indentAt($start);
         $eol = $layout->eol();
         if (($edit['reindent'] ?? true) === false) {
-            $replacement = $this->code($code, $indent, $eol, $edit);
+            $replacement = $this->code($code, $indent, $eol, $edit, false, $layout->indentUnit());
             $start = str_starts_with(ltrim($code), '/**') ? $start : $symbol->startPos();
         } else {
             // The doc comment and the attributes are kept unless the new code brings its own: omitted means unchanged.
@@ -77,7 +77,7 @@ final readonly class PhpSourceEditor
                 $head['declaration'],
             ], static fn (?string $part): bool => $part !== null && $part !== ''));
             $replacement = implode($eol . $indent, array_map(
-                static fn (string $part): string => TextLayout::reindent($part, $indent, $eol),
+                static fn (string $part): string => TextLayout::reindent($part, $indent, $eol, false, $layout->indentUnit()),
                 $parts,
             ));
         }
@@ -169,7 +169,7 @@ final readonly class PhpSourceEditor
         $close = $symbol->endPos();
         $indent = $layout->indentAt($symbol->docStartPos());
         $eol = $layout->eol();
-        $body = $this->code((string) $edit['code'], $indent . $layout->indentUnit(), $eol, $edit, true);
+        $body = $this->code((string) $edit['code'], $indent . $layout->indentUnit(), $eol, $edit, true, $layout->indentUnit());
         $block = '{' . $eol . ($body === '' ? '' : $body . $eol) . $indent . '}';
 
         return [
@@ -192,7 +192,7 @@ final readonly class PhpSourceEditor
         $memberIndent = $members !== []
             ? $layout->indentAt($members[0]->docStartPos())
             : $layout->indentAt($owner->docStartPos()) . $layout->indentUnit();
-        $block = $this->code((string) $edit['code'], $memberIndent, $eol, $edit, true);
+        $block = $this->code((string) $edit['code'], $memberIndent, $eol, $edit, true, $layout->indentUnit());
         if (trim($block) === '') {
             throw new SymbolEditException('insert_member needs non-empty `code`.');
         }
@@ -463,12 +463,12 @@ final readonly class PhpSourceEditor
     }
 
     /** @param array<string, mixed> $edit */
-    private function code(string $code, string $indent, string $eol, array $edit, bool $indentFirstLine = false): string
+    private function code(string $code, string $indent, string $eol, array $edit, bool $indentFirstLine = false, ?string $unit = null): string
     {
         if (($edit['reindent'] ?? true) === false) {
             return str_replace("\n", $eol, str_replace(["\r\n", "\r"], "\n", $code));
         }
 
-        return TextLayout::reindent($code, $indent, $eol, $indentFirstLine);
+        return TextLayout::reindent($code, $indent, $eol, $indentFirstLine, $unit);
     }
 }

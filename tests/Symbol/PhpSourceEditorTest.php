@@ -247,6 +247,24 @@ PHP, $result['content']);
         $this->assertParses($result['content']);
     }
 
+    public function testInsertMemberIntoATabIndentedFileDoesNotMixTabsAndSpaces(): void
+    {
+        $source = "<?php\n\nfinal class T\n{\n\tpublic function one(): int\n\t{\n\t\treturn 1;\n\t}\n}\n";
+
+        $result = $this->edit($source, ['op' => 'insert_member', 'symbol' => 'T', 'code' => "public function two(): int\n{\n    \$x = [\n        2,\n    ];\n\n    return \$x[0];\n}"], 't.php');
+
+        self::assertSame("<?php\n\nfinal class T\n{\n\tpublic function one(): int\n\t{\n\t\treturn 1;\n\t}\n\n\tpublic function two(): int\n\t{\n\t\t\$x = [\n\t\t\t2,\n\t\t];\n\n\t\treturn \$x[0];\n\t}\n}\n", $result['content']);
+    }
+
+    public function testReplaceBodyInATabIndentedFileUsesTabsForNesting(): void
+    {
+        $source = "<?php\n\nfinal class T\n{\n\tpublic function one(): int\n\t{\n\t\treturn 1;\n\t}\n}\n";
+
+        $result = $this->edit($source, ['op' => 'replace_body', 'symbol' => 'T::one()', 'code' => "if (true) {\n    return 2;\n}\n\nreturn 3;"], 't.php');
+
+        self::assertStringContainsString("\t{\n\t\tif (true) {\n\t\t\treturn 2;\n\t\t}\n\n\t\treturn 3;\n\t}\n", $result['content']);
+    }
+
     public function testInsertMemberIntoAnEmptyOneLineClassOpensTheBody(): void
     {
         $result = $this->edit("<?php\n\nfinal class Empty_ {}\n", ['op' => 'insert_member', 'symbol' => 'Empty_', 'code' => 'public int $x = 1;'], 'e.php');
