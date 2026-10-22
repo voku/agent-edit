@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace voku\AgentEdit\Plan;
 
+use PhpParser\Error;
+use PhpParser\Node;
+use PhpParser\Node\Stmt;
+use PhpParser\ParserFactory;
 use RuntimeException;
 
 /**
@@ -98,64 +102,32 @@ final readonly class ClassScaffoldPlanDocument
             throw new RuntimeException('Class scaffold content must start with a PHP open tag.');
         }
         try {
-            $tokens = token_get_all($content, TOKEN_PARSE);
-        } catch (\ParseError $error) {
+            $statements = (new ParserFactory())->createForHostVersion()->parse($content) ?? [];
+        } catch (Error $error) {
             throw new RuntimeException('Class scaffold content does not parse: ' . $error->getMessage(), 0, $error);
         }
 
-        $trivia = [T_OPEN_TAG, T_WHITESPACE, T_COMMENT, T_DOC_COMMENT];
-        $modifiers = [T_FINAL, T_ABSTRACT, T_READONLY];
-        $kinds = [T_CLASS, T_INTERFACE, T_TRAIT, T_ENUM];
-        $depth = 0;
         $namespace = '';
         $declared = [];
-        $statement = null;
-        $count = count($tokens);
-        for ($index = 0; $index < $count; ++$index) {
-            $token = $tokens[$index];
-            if (is_string($token)) {
-                if ($token === '{') {
-                    ++$depth;
-                } elseif ($token === '}') {
-                    --$depth;
-                    if ($depth === 0 && $statement === 'type') {
-                        $statement = null;
-                    }
-                } elseif ($token === ';' && $depth === 0 && $statement !== 'type') {
-                    $statement = null;
-                }
+        $pending = $statements;
+        while ($pending !== []) {
+            $statement = array_shift($pending);
+            if ($statement instanceof Stmt\Namespace_) {
+                $namespace = $statement->name?->toString() ?? '';
+                array_unshift($pending, ...$statement->stmts);
                 continue;
             }
-            if ($token[0] === T_CURLY_OPEN || $token[0] === T_DOLLAR_OPEN_CURLY_BRACES) {
-                ++$depth;
-                continue;
-            }
-            if ($depth > 0 || in_array($token[0], $trivia, true)) {
-                continue;
-            }
-            if ($statement === null) {
-                $statement = match (true) {
-                    $token[0] === T_DECLARE => 'declare',
-                    $token[0] === T_NAMESPACE => 'namespace',
-                    $token[0] === T_USE => 'use',
-                    in_array($token[0], $modifiers, true) || in_array($token[0], $kinds, true) => 'type',
-                    default => throw new RuntimeException('Class scaffold content may only declare one type; found top-level code: ' . trim($token[1]) . '.'),
-                };
-            }
-            if ($statement === 'namespace' && $token[0] !== T_NAMESPACE) {
-                $namespace .= $token[1];
-            }
-            if ($statement === 'type' && in_array($token[0], $kinds, true)) {
-                for ($next = $index + 1; $next < $count; ++$next) {
-                    $candidate = $tokens[$next];
-                    if (is_array($candidate) && in_array($candidate[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
-                        continue;
-                    }
-                    $declared[] = is_array($candidate) && $candidate[0] === T_STRING ? $candidate[1] : '';
-                    break;
-                }
-            }
+            $declared[] = match (true) {
+                // A `declare` that governs a statement or block would run that code: only `declare(...);` is a directive.
+                $statement instanceof Stmt\Declare_ && $statement->stmts === null,
+                $statement instanceof Stmt\Use_,
+                $statement instanceof Stmt\GroupUse,
+                $statement instanceof Stmt\Nop => null,
+                $statement instanceof Stmt\ClassLike && !$statement instanceof Stmt\Class_ || $statement instanceof Stmt\Class_ && $statement->name !== null => $statement->name?->toString(),
+                default => throw new RuntimeException('Class scaffold content may only declare one type; found top-level code: ' . self::excerpt($content, $statement) . '.'),
+            };
         }
+        $declared = array_values(array_filter($declared, static fn (?string $name): bool => $name !== null));
 
         $separator = strrpos($fqn, '\\');
         $expectedNamespace = $separator === false ? '' : substr($fqn, 0, $separator);
@@ -166,6 +138,15 @@ final readonly class ClassScaffoldPlanDocument
         if ($namespace !== $expectedNamespace) {
             throw new RuntimeException('Class scaffold content must declare namespace ' . ($expectedNamespace === '' ? '(global)' : $expectedNamespace) . '.');
         }
+    }
+
+    private static function excerpt(string $content, Node $statement): string
+    {
+        $start = $statement->getStartFilePos();
+        $text = $start >= 0 ? substr($content, $start, max(0, $statement->getEndFilePos() - $start + 1)) : '';
+        $line = trim(strtok($text, "\n") ?: '');
+
+        return $line === '' ? $statement->getType() : $line;
     }
 
     private static function safePath(string $path): string

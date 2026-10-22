@@ -40,7 +40,7 @@ final readonly class EditCommand
         try {
             [$plan, $passThrough] = $this->plan($tokens);
         } catch (Throwable $exception) {
-            if (in_array('--format=json', $tokens, true)) {
+            if (self::wantsJson($tokens)) {
                 echo FailureReport::encode(['schema_version' => '1.0', 'command' => 'edit', 'ok' => false, 'error' => FailureReport::describe($exception)]);
 
                 return 2;
@@ -54,6 +54,22 @@ final readonly class EditCommand
 
         return (new ApplyCommand($this->projectRoot, $this->engine, $this->authorizeMutation, static fn (): string => $json))
             ->run(['-', ...$passThrough]);
+    }
+
+    /**
+     * Both `--format=json` and `--format json` select JSON, matching `apply`, also for errors raised before the plan exists.
+     *
+     * @param list<string> $tokens
+     */
+    private static function wantsJson(array $tokens): bool
+    {
+        foreach ($tokens as $index => $token) {
+            if ($token === '--format=json' || ($token === '--format' && ($tokens[$index + 1] ?? null) === 'json')) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

@@ -343,7 +343,12 @@ final class ClassScaffoldPlanTest extends TestCase
             return $p;
         }), 'must be a .php file'];
         yield 'top-level code' => [$edit(static fn (array $e): array => ['replacement' => $e['replacement'] . "\nsystem('id');\n"] + $e), 'found top-level code'];
-        yield 'top-level code before' => [$edit(static fn (array $e): array => ['replacement' => str_replace("namespace", "echo 1;\nnamespace", $e['replacement'])] + $e), 'found top-level code'];
+        yield 'top-level code before' => [$edit(static fn (array $e): array => ['replacement' => str_replace("namespace", "echo 1;\nnamespace", $e['replacement'])] + $e), 'Namespace declaration statement has to be the very first statement'];
+        // Regression: `declare(...)` swallowed everything up to the next top-level `;`, including a statement it governs.
+        yield 'declare carrying a statement' => [$edit(static fn (array $e): array => ['replacement' => str_replace('namespace Demo\\Deep\\New;', "namespace Demo\\Deep\\New;\n\ndeclare(ticks=1) file_put_contents(__DIR__ . '/../PWNED', 'x');", $e['replacement'])] + $e), 'found top-level code'];
+        yield 'declare block' => [$edit(static fn (array $e): array => ['replacement' => str_replace('namespace Demo\\Deep\\New;', "namespace Demo\\Deep\\New;\n\ndeclare(ticks=1) { echo 1; }", $e['replacement'])] + $e), 'found top-level code'];
+        yield 'function' => [$edit(static fn (array $e): array => ['replacement' => $e['replacement'] . "\nfunction helper(): void {}\n"] + $e), 'found top-level code'];
+        yield 'inline html' => [$edit(static fn (array $e): array => ['replacement' => $e['replacement'] . "?>\nhello\n"] + $e), 'found top-level code'];
         yield 'second class' => [$edit(static fn (array $e): array => ['replacement' => $e['replacement'] . "\nfinal class Second\n{\n}\n"] + $e), 'exactly the type Thing'];
         yield 'wrong class name' => [$edit(static fn (array $e): array => ['replacement' => str_replace('class Thing', 'class Other', $e['replacement'])] + $e), 'exactly the type Thing'];
         yield 'wrong namespace' => [$edit(static fn (array $e): array => ['replacement' => str_replace('namespace Demo\\Deep\\New;', 'namespace Evil;', $e['replacement'])] + $e), 'must declare namespace Demo\\Deep\\New'];
