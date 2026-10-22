@@ -223,6 +223,30 @@ PHP, $result['content']);
         self::assertStringContainsString("final class Greeter\n{\n    use SomeTrait;\n\n    public const PREFIX", $result['content']);
     }
 
+    public function testInsertMemberKeepsTheValueOfAMultiLineString(): void
+    {
+        $result = $this->edit(self::SERVICE, [
+            'op' => 'insert_member',
+            'symbol' => 'Greeter',
+            'code' => "public function banner(): string\n{\n    return 'one\n  two\nthree';\n}",
+        ]);
+
+        self::assertStringContainsString("    public function banner(): string\n    {\n        return 'one\n  two\nthree';\n    }\n}", $result['content']);
+        $this->assertParses($result['content']);
+    }
+
+    public function testReplaceBodyKeepsTheValueOfAMultiLineString(): void
+    {
+        $result = $this->edit(self::SERVICE, [
+            'op' => 'replace_body',
+            'symbol' => 'Greeter::greet()',
+            'code' => "return \"a\n  b {\$user->name}\nc\";",
+        ]);
+
+        self::assertStringContainsString("        return \"a\n  b {\$user->name}\nc\";\n    }", $result['content']);
+        $this->assertParses($result['content']);
+    }
+
     public function testInsertMemberIntoAnEmptyOneLineClassOpensTheBody(): void
     {
         $result = $this->edit("<?php\n\nfinal class Empty_ {}\n", ['op' => 'insert_member', 'symbol' => 'Empty_', 'code' => 'public int $x = 1;'], 'e.php');

@@ -78,23 +78,32 @@ final readonly class TextLayout
      * Removes surrounding blank lines and the common leading indentation from agent-written code, then indents every
      * line but the first with `$indent` (the first line continues where the replaced text started) and converts line
      * breaks to `$eol`.
+     *
+     * A line that starts inside a quoted string literal is string content, not code layout: it is neither dedented nor
+     * indented (and does not count towards the common indentation), so re-indenting never changes a value. Heredoc and
+     * nowdoc bodies are indented together with their closing marker, which PHP removes again.
      */
     public static function reindent(string $code, string $indent, string $eol, bool $indentFirstLine = false): string
     {
-        $lines = explode("\n", str_replace(["\r\n", "\r"], "\n", $code));
+        $normalized = str_replace(["\r\n", "\r"], "\n", $code);
+        $lines = explode("\n", $normalized);
+        $verbatim = self::linesInsideStrings($normalized);
+
         while ($lines !== [] && trim($lines[0]) === '') {
             array_shift($lines);
+            $verbatim = array_slice($verbatim, 1);
         }
         while ($lines !== [] && trim($lines[count($lines) - 1]) === '') {
             array_pop($lines);
+            array_pop($verbatim);
         }
         if ($lines === []) {
             return '';
         }
 
         $common = null;
-        foreach ($lines as $line) {
-            if (trim($line) === '') {
+        foreach ($lines as $index => $line) {
+            if (trim($line) === '' || $verbatim[$index]) {
                 continue;
             }
             $leading = substr($line, 0, strspn($line, " \t"));
@@ -104,6 +113,10 @@ final readonly class TextLayout
 
         $result = [];
         foreach ($lines as $index => $line) {
+            if ($verbatim[$index]) {
+                $result[] = $line;
+                continue;
+            }
             if (trim($line) === '') {
                 $result[] = '';
                 continue;
@@ -113,6 +126,53 @@ final readonly class TextLayout
         }
 
         return implode($eol, $result);
+    }
+
+    /**
+     * For every line of `$code` (split on "\n"): whether it starts inside a quoted string literal, that is a
+     * single-quoted, double-quoted or backtick string that continues over a line break. Heredoc and nowdoc bodies are
+     * not included; their indentation is governed by the closing marker.
+     *
+     * @return list<bool>
+     */
+    private static function linesInsideStrings(string $code): array
+    {
+        $lines = substr_count($code, "\n") + 1;
+        $inside = array_fill(0, $lines, false);
+        if (!str_contains($code, "\n") || !class_exists(\PhpToken::class)) {
+            return $inside;
+        }
+
+        $line = 0;
+        $heredoc = false;
+        $quoted = false;
+        $first = true;
+        foreach (\PhpToken::tokenize("<?php\n" . $code) as $token) {
+            if ($first) {
+                $first = false; // the "<?php\n" prefix
+                continue;
+            }
+            if ($token->id === T_START_HEREDOC) {
+                $heredoc = true;
+            } elseif ($token->id === T_END_HEREDOC) {
+                $heredoc = false;
+            } elseif (!$heredoc && ($token->text === '"' || $token->text === '`')) {
+                $quoted = !$quoted;
+            }
+
+            $breaks = substr_count($token->text, "\n");
+            if ($breaks > 0 && !$heredoc && $token->id !== T_START_HEREDOC) {
+                $spansLines = $quoted || $token->id === T_CONSTANT_ENCAPSED_STRING || $token->id === T_ENCAPSED_AND_WHITESPACE;
+                if ($spansLines) {
+                    for ($offset = 1; $offset <= $breaks && $line + $offset < $lines; ++$offset) {
+                        $inside[$line + $offset] = true;
+                    }
+                }
+            }
+            $line += $breaks;
+        }
+
+        return array_values($inside);
     }
 
     private static function commonPrefix(string $left, string $right): string

@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Fixed
+
+- Symbol edits (`replace_symbol`, `replace_body`, `insert_member`) changed the value of a multi-line string literal: re-indentation added the target indentation to every continuation line of a single-quoted, double-quoted or backtick string (`'a\nb'` became `'a\n    b'`) and the common-indent removal stripped characters from them, with no error. Lines that start inside such a string are now left verbatim and do not count towards the common indentation; heredoc and nowdoc bodies still move together with their closing marker, which PHP removes again. Found by applying a `source_edit_plan` to a real test file.
+
 ## 0.5.0 - 2026-10-22
 
 ### Added
