@@ -10,6 +10,7 @@ use voku\AgentEdit\Failure\CodedFailure;
 use voku\AgentEdit\Failure\FailureCode;
 use voku\AgentEdit\Receipt\ApplyRequest;
 use voku\AgentEdit\Tests\Support\CachedAgentMapBuilder;
+use voku\AgentEdit\Tests\Support\CapturesFailures;
 use voku\AgentEdit\Tests\Support\ScratchProject;
 use voku\AgentMap\Index\AgentMapIndex;
 use voku\AgentMap\Index\IndexWriter;
@@ -19,6 +20,7 @@ use voku\AgentEdit\Apply\RenamePlanApplier;
 /** Every refusal an agent can hit on the apply and verify path names its cause, so it can pick the one legal recovery. */
 final class EngineFailureCodesTest extends TestCase
 {
+    use CapturesFailures;
     use ScratchProject;
 
     private AgentMapIndex $map;
@@ -190,11 +192,12 @@ final class EngineFailureCodesTest extends TestCase
     public function testAnUnmigratedFailureSiteIsNotGuessedIntoACode(): void
     {
         // Sites that were not migrated keep throwing what they always threw; nothing is classified from their text.
-        try {
-            (new RenamePlanApplier())->preflight(['type' => 'method_rename_plan', 'contract_version' => '1.0'], $this->map, $this->root);
-            self::fail('Expected the malformed rename plan to be refused.');
-        } catch (\RuntimeException $failure) {
-            self::assertNotInstanceOf(CodedFailure::class, $failure);
-        }
+        $failure = $this->capturedOrFail(
+            fn () => (new RenamePlanApplier())->preflight(['type' => 'method_rename_plan', 'contract_version' => '1.0'], $this->map, $this->root),
+            'a malformed rename plan',
+        );
+
+        self::assertInstanceOf(\RuntimeException::class, $failure);
+        self::assertNotInstanceOf(CodedFailure::class, $failure);
     }
 }

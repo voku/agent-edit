@@ -94,7 +94,7 @@ final readonly class EditMovePlanApplier
 
         /** @var array<string, string> $original */
         $original = [];
-        /** @var array<string, list<array{int, int, string}>> $byFile */
+        /** @var array<string, list<array{int, int, string}>> $byFile start offset, replaced length, replacement */
         $byFile = [];
         /** @var array<string, string> $sourceHashes */
         $sourceHashes = [];
@@ -104,12 +104,13 @@ final readonly class EditMovePlanApplier
             $content = $original[$path] ??= $this->read($path);
             if (
                 !hash_equals($edit->sourceSha256, 'sha256:' . hash('sha256', $content))
-                || substr($content, $edit->startFilePos, $edit->endFilePos - $edit->startFilePos + 1) !== $edit->expected
+                || $edit->startFilePos > strlen($content)
+                || substr($content, $edit->startFilePos, $edit->replacedLength()) !== $edit->expected
             ) {
                 throw new EditFailure('Refactor edit evidence changed before apply; rebuild and re-plan.', FailureCode::EvidenceChanged);
             }
             $this->rememberSourceHash($sourceHashes, $path, $edit->sourceSha256);
-            $byFile[$path][] = [$edit->startFilePos, $edit->endFilePos, $edit->replacement];
+            $byFile[$path][] = [$edit->startFilePos, $edit->replacedLength(), $edit->replacement];
         }
 
         /** @var array<string, string> $files */
@@ -118,11 +119,15 @@ final readonly class EditMovePlanApplier
             usort($fileEdits, static fn (array $left, array $right): int => $right[0] <=> $left[0]);
             $content = $original[$path];
             $previousStart = strlen($content);
-            foreach ($fileEdits as [$start, $end, $replacement]) {
-                if ($end >= $previousStart) {
+            $hasPrevious = false;
+            foreach ($fileEdits as [$start, $length, $replacement]) {
+                // An insertion replaces nothing, so it only conflicts with a later edit that starts at the same byte
+                // (their order would be ambiguous); any other edit conflicts when its range reaches into the later one.
+                if ($start + $length > $previousStart || ($hasPrevious && $length === 0 && $start === $previousStart)) {
                     throw new RuntimeException('Refactor plan contains overlapping edit ranges.');
                 }
-                $content = substr($content, 0, $start) . $replacement . substr($content, $end + 1);
+                $hasPrevious = true;
+                $content = substr($content, 0, $start) . $replacement . substr($content, $start + $length);
                 $previousStart = $start;
             }
             $files[$path] = $content;
