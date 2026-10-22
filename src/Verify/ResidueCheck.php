@@ -20,7 +20,11 @@ final readonly class ResidueCheck
     private const SUPPORTED_PLANS = ['method_rename_plan', 'class_rename_plan', 'method_removal_plan', 'class_removal_plan'];
     private const MAX_LISTED = 50;
 
-    public function __construct(private NonPhpReferenceScanner $scanner = new NonPhpReferenceScanner())
+    /**
+     * The scanner is uncapped: its own cap keeps the first references in path order, so a long changelog (sorted first)
+     * would crowd out the open mentions this check exists to count. Only the listed open references are capped here.
+     */
+    public function __construct(private NonPhpReferenceScanner $scanner = new NonPhpReferenceScanner(PHP_INT_MAX))
     {
     }
 
@@ -39,9 +43,11 @@ final readonly class ResidueCheck
         $report = $this->scanner->scan($projectRoot, ...$targets);
         $open = array_values(array_filter($report->references, static fn (NonPhpReference $reference): bool => !$reference->historical));
         $historical = count($report->references) - count($open);
-        $truncated = $report->total > count($report->references);
+        // A capped scanner may still have been injected: references it did not return cannot be proven historical.
+        $unlisted = $report->total - count($report->references);
+        $truncated = $unlisted > 0 || count($open) > self::MAX_LISTED;
 
-        $status = $open === [] && !$truncated ? 'clear' : ($disposition !== null ? 'accepted' : 'open');
+        $status = $open === [] && $unlisted === 0 ? 'clear' : ($disposition !== null ? 'accepted' : 'open');
         $result['residue'] = [
             'status' => $status,
             'open' => count($open),
