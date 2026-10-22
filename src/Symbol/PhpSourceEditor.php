@@ -455,6 +455,9 @@ final readonly class PhpSourceEditor
                     $at = $token->pos + strlen($token->text);
                     continue;
                 }
+                if ($token->id === T_INLINE_HTML && $at === 0) {
+                    continue; // a shebang line or markup before the first `<?php`: the import belongs after the tag
+                }
                 if ($token->id === T_DECLARE) {
                     $declareEnd = strpos($content, ';', $token->pos);
                     $at = $declareEnd === false ? $at : $layout->nextLineStart($declareEnd);

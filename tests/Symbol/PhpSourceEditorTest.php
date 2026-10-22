@@ -445,6 +445,28 @@ PHP, $result['content']);
         $this->edit($source, ['op' => 'add_use', 'name' => 'Other\\Bar'], 'b.php');
     }
 
+    public function testAddUseInAScriptWithAShebangGoesAfterTheOpenTagAndIsIdempotent(): void
+    {
+        $source = "#!/usr/bin/env php\n<?php\n\ndeclare(strict_types=1);\n\nrequire __DIR__ . '/vendor/autoload.php';\n";
+
+        foreach (['class' => 'use Lib\\Thing;', 'function' => 'use function Lib\\helper;', 'const' => 'use const Lib\\LIMIT;'] as $kind => $statement) {
+            $name = $kind === 'class' ? 'Lib\\Thing' : ($kind === 'function' ? 'Lib\\helper' : 'Lib\\LIMIT');
+            $result = $this->edit($source, ['op' => 'add_use', 'name' => $name, 'kind' => $kind], 's.php');
+
+            self::assertSame("#!/usr/bin/env php\n<?php\n\ndeclare(strict_types=1);\n\n" . $statement . "\n\nrequire __DIR__ . '/vendor/autoload.php';\n", $result['content'], $kind);
+            $again = $this->edit($result['content'], ['op' => 'add_use', 'name' => $name, 'kind' => $kind], 's.php');
+            self::assertSame($result['content'], $again['content'], $kind . ' is idempotent');
+        }
+    }
+
+    public function testAddUseAfterMarkupBeforeTheFirstOpenTag(): void
+    {
+        $result = $this->edit("<html>\n<?php\nfinal class H {}\n", ['op' => 'add_use', 'name' => 'Lib\\Thing'], 'h.php');
+
+        self::assertStringStartsWith("<html>\n<?php\n", $result['content']);
+        self::assertStringContainsString("use Lib\\Thing;\n", $result['content']);
+    }
+
     public function testAddUseIntoANamespaceWithoutImports(): void
     {
         $result = $this->edit("<?php\n\nnamespace App;\n\nfinal class A {}\n", ['op' => 'add_use', 'name' => 'Lib\Thing'], 'a.php');
