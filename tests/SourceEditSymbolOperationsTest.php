@@ -188,6 +188,21 @@ PHP, $this->project->read('src/Greeter.php'));
         $this->apply([['op' => 'remove_symbol', 'path' => 'README.md', 'symbol' => 'Demo']], dryRun: true);
     }
 
+    public function testAddUseAfterAnImportThatEndsPhpOnItsLineIsRefusedAndLeavesTheFileUntouched(): void
+    {
+        $source = "<?php\nnamespace App;\nuse A\\One; ?>\nhtml\n";
+        $this->project->write('src/Closing.php', $source);
+
+        try {
+            $this->apply([['op' => 'add_use', 'path' => 'src/Closing.php', 'name' => 'Z\\Two']]);
+            self::fail('An import appended after a closing tag must be refused.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('replace_text', $exception->getMessage());
+        }
+
+        self::assertSame($source, $this->project->read('src/Closing.php'));
+    }
+
     public function testAPlanOfOnlyNoOpEditsChangesNothingAndIsRefused(): void
     {
         $this->expectExceptionMessage('The plan changes nothing');

@@ -388,7 +388,7 @@ final readonly class PhpSourceEditor
                 }
             }
             $indent = $layout->indentAt($anchor->getStartFilePos());
-            $at = $insertBefore !== null ? $layout->lineStart($insertBefore->getStartFilePos()) : $layout->nextLineStart($anchor->getEndFilePos());
+            $at = $insertBefore !== null ? $layout->lineStart($insertBefore->getStartFilePos()) : $this->lineStartAfterImport($content, $layout, $anchor, $path);
 
             return [
                 'range' => [$at, $at, $indent . $statement . $eol],
@@ -400,10 +400,7 @@ final readonly class PhpSourceEditor
         // PER-CS: class, function, const). Before them it would sit above the class imports of the file.
         $before = $this->lastImportOfEarlierKind($symbols->imports, $type);
         if ($before !== null) {
-            $at = $layout->nextLineStart($before->getEndFilePos());
-            if (str_contains(substr($content, $before->getEndFilePos() + 1, $at - $before->getEndFilePos() - 1), '?>')) {
-                throw new SymbolEditException($path . ' closes PHP on the line of its last import; add the import with replace_text.');
-            }
+            $at = $this->lineStartAfterImport($content, $layout, $before, $path);
             $blankFollows = trim($layout->lineAt($at)) === '';
 
             return [
@@ -418,6 +415,21 @@ final readonly class PhpSourceEditor
             'range' => [$at, $at, $text],
             'summary' => sprintf('imported %s', $name),
         ];
+    }
+
+    /**
+     * Where a new import goes when it follows `$import`: the start of the next line. Refused when PHP is closed on the
+     * import's line (`use A\\One; ?>`), because that offset is outside the PHP tags and the import would be output text.
+     */
+    private function lineStartAfterImport(string $content, TextLayout $layout, Stmt\Use_|Stmt\GroupUse $import, string $path): int
+    {
+        $end = $import->getEndFilePos();
+        $at = $layout->nextLineStart($end);
+        if (str_contains(substr($content, $end + 1, $at - $end - 1), '?>')) {
+            throw new SymbolEditException($path . ' closes PHP on the line of its last import; add the import with replace_text.');
+        }
+
+        return $at;
     }
 
     /**

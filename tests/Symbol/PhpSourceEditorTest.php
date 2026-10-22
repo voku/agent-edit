@@ -455,6 +455,32 @@ PHP, $result['content']);
         $this->edit($source, ['op' => 'add_use', 'name' => 'V\\f', 'kind' => 'function'], 'c.php');
     }
 
+    public function testAddUseRefusesToAppendToABlockWhoseLastImportEndsPhpOnItsLine(): void
+    {
+        $source = "<?php\nnamespace App;\nuse A\\One; ?>\nhtml\n";
+
+        $this->expectException(SymbolEditException::class);
+        $this->expectExceptionMessage('replace_text');
+        $this->edit($source, ['op' => 'add_use', 'name' => 'Z\\Two'], 'c.php');
+    }
+
+    public function testAddUseStillInsertsBeforeAnImportThatEndsPhpOnItsLineAndAppendsToOrdinaryBlocks(): void
+    {
+        // Sorted block, new name sorts first: inserted at the start of the existing import's line, inside PHP.
+        $closing = "<?php\nnamespace App;\nuse M\\One; ?>\nhtml\n";
+        self::assertSame(
+            "<?php\nnamespace App;\nuse A\\First;\nuse M\\One; ?>\nhtml\n",
+            $this->edit($closing, ['op' => 'add_use', 'name' => 'A\\First'], 'c.php')['content'],
+        );
+
+        // An ordinary block (no closing tag on the last import's line) is appended to as before.
+        $ordinary = "<?php\nnamespace App;\nuse A\\One;\nuse B\\Two; // note\n\nfinal class C {}\n";
+        self::assertSame(
+            "<?php\nnamespace App;\nuse A\\One;\nuse B\\Two; // note\nuse C\\Three;\n\nfinal class C {}\n",
+            $this->edit($ordinary, ['op' => 'add_use', 'name' => 'C\\Three'], 'c.php')['content'],
+        );
+    }
+
     public function testAddUseStillOpensALaterKindBlockWhenTheImportLineEndsWithAComment(): void
     {
         $source = "<?php\nnamespace App;\nuse A\\One; // why\n\nfinal class C {}\n";
