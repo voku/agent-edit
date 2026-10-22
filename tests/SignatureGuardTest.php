@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace voku\AgentEdit\Tests;
 
 use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\RequiresPhp;
 use PHPUnit\Framework\TestCase;
 use voku\AgentEdit\Apply\SignatureGuard;
 
@@ -337,6 +338,8 @@ PHP;
         yield 'enum case renamed' => [$class('    case One;', 'enum A'), $class('    case Uno;', 'enum A'), 'case `D\A::One` was removed or renamed'];
         yield 'backed enum value changed' => [$class("    case One = 'a';", 'enum A: string'), $class("    case One = 'b';", 'enum A: string'), "case `D\\A::One` signature changed from `= 'a'` to `= 'b'`"];
         yield 'enum case gains a backing value' => [$class('    case One;', 'enum A'), $class('    case One = 1;', 'enum A'), 'case `D\A::One` signature changed from `case` to `= 1`'];
+        yield 'backed enum value loses a space inside the string' => [$class("    case One = 'a b';", 'enum A: string'), $class("    case One = 'ab';", 'enum A: string'), "case `D\\A::One` signature changed from `= 'a b'` to `= 'ab'`"];
+        yield 'backed enum value changes whitespace inside a double-quoted string' => [$class('    case One = "a  b";', 'enum A: string'), $class('    case One = "a b";', 'enum A: string'), 'case `D\\A::One` signature changed from `= "a  b"` to `= "a b"`'];
         yield 'public property removed' => [$class('    public int $x = 1;'), $class(''), 'property `D\A::$x` was removed or renamed'];
         yield 'untyped property without value removed' => [$class('    public $x;'), $class(''), 'property `D\A::$x` was removed or renamed'];
         yield 'var property removed' => [$class('    var $x;'), $class(''), 'property `D\A::$x` was removed or renamed'];
@@ -370,6 +373,8 @@ PHP;
         yield 'enum case added' => [$class('    case One;', 'enum A'), $class("    case One;\n    case Two;", 'enum A')];
         yield 'reformatting' => [$class('    public  ?int   $x = 1;'), $class("    public\n        ?int\n        \$x = 1;")];
         yield 'comments between modifiers and name' => [$class('    public int $x = 1;'), $class('    public /* c */ int $x = 1; // why')];
+        yield 'enum value reformatted outside strings' => [$class("    case One = 'a b' . PHP_EOL;", 'enum A: string'), $class("    case One =\n        'a b'   .   PHP_EOL; // why", 'enum A: string')];
+        yield 'enum value with a comment between operands' => [$class("    case One = 1 + 2;", 'enum A: int'), $class("    case One = 1 /* c */ + 2;", 'enum A: int')];
         yield 'moved within the class' => [$class("    public int \$x = 1;\n    public const X = 1;"), $class("    public const X = 1;\n    public int \$x = 1;")];
         yield 'anonymous class members' => [$class('    public function f(): object { return new class { public $x; public const Y = 1; }; }'), $class('    public function f(): object { return new class { }; }')];
         yield 'promoted parameter body edit' => [$class('    public function __construct(public readonly int $x) { }'), $class('    public function __construct(public readonly int $x) { echo 1; }')];
@@ -379,6 +384,31 @@ PHP;
     public function testPrivateMembersValuesReformattingAndAdditionsAreNotApiChanges(string $before, string $after): void
     {
         self::assertSame([], (new SignatureGuard())->changes($before, $after));
+    }
+
+    #[RequiresPhp('>= 8.4')]
+    public function testAsymmetricPropertyVisibilityIsPartOfThePropertyShape(): void
+    {
+        $guard = new SignatureGuard();
+        $class = static fn (string $body): string => "<?php\nnamespace D;\nclass A\n{\n$body\n}\n";
+
+        // Dropping the narrower setter visibility widens who may write the property.
+        self::assertSame(
+            ['property `D\A::$v` signature changed from `public private(set) string` to `public string`'],
+            $guard->changes($class('    public private(set) string $v = "";'), $class('    public string $v = "";')),
+        );
+        self::assertSame(
+            ['property `D\A::$v` signature changed from `public string` to `public protected(set) string`'],
+            $guard->changes($class('    public string $v = "";'), $class('    public protected(set) string $v = "";')),
+        );
+        self::assertSame(
+            ['property `D\A::$v` signature changed from `public protected(set) string` to `public private(set) string`'],
+            $guard->changes($class('    public protected(set) string $v = "";'), $class('    public private(set) string $v = "";')),
+        );
+        self::assertSame(
+            [],
+            $guard->changes($class('    public private(set) string $v = "";'), $class("    public   private(set)\n        string \$v = 'x';")),
+        );
     }
 
     public function testMemberDeclarationsAreKeyedByOwner(): void

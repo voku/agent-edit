@@ -20,9 +20,10 @@ use PhpParser\ParserFactory;
  * A direct edit carries no cross-file evidence (no callers, no blockers), so the one class of change that needs such
  * evidence is detected from the source instead: removing or renaming a class, function or non-private method, or
  * changing its signature (token stream), and removing, renaming or changing the shape of a non-private class constant,
- * enum case or property (parsed declarations: visibility, `static`, `readonly`, `final`, declared type, and the backing
- * value of an enum case). Bodies, private members, constant and property values and additions are never reported. A
- * reported change is not an error in the code, it is a change whose callers nobody has looked at yet.
+ * enum case or property (parsed declarations: visibility, PHP 8.4 setter visibility, `static`, `readonly`, `final`,
+ * declared type, and the backing value of an enum case, compared without whitespace and comments but with the content
+ * of string literals intact). Bodies, private members, constant and property values and additions are never reported.
+ * A reported change is not an error in the code, it is a change whose callers nobody has looked at yet.
  */
 final class SignatureGuard
 {
@@ -194,11 +195,17 @@ final class SignatureGuard
         return $members;
     }
 
-    /** Visibility, `static`, `readonly`, `final` and the declared type as one comparable string. */
+    /** Visibility, setter visibility, `static`, `readonly`, `final` and the declared type as one comparable string. */
     private function shape(int $flags, ?Node $type, string $source): string
     {
         $parts = [];
         $parts[] = ($flags & Modifiers::PROTECTED) !== 0 ? 'protected' : 'public';
+        // PHP 8.4 asymmetric visibility. Literal flag values: the `Modifiers::*_SET` constants only exist from php-parser 5.4.
+        foreach ([128 => 'public(set)', 256 => 'protected(set)', 512 => 'private(set)'] as $flag => $word) {
+            if (($flags & $flag) !== 0) {
+                $parts[] = $word;
+            }
+        }
         foreach ([Modifiers::STATIC => 'static', Modifiers::READONLY => 'readonly', Modifiers::FINAL => 'final'] as $flag => $word) {
             if (($flags & $flag) !== 0) {
                 $parts[] = $word;
@@ -211,13 +218,39 @@ final class SignatureGuard
         return implode(' ', $parts);
     }
 
-    /** The source text of a node without whitespace, so reformatting is not a change. */
+    /**
+     * The source text of a node as its significant tokens: whitespace and comments are dropped, so reformatting is not
+     * a change, while the content of string literals is kept exactly (`'a b'` and `'ab'` differ). A space survives only
+     * where removing it would fuse two words (`1 and 2`).
+     */
     private function text(Node $node, string $source): string
     {
         $start = $node->getStartFilePos();
         $end = $node->getEndFilePos();
+        if ($start < 0 || $end < $start) {
+            return '';
+        }
 
-        return $start < 0 || $end < $start ? '' : (string) preg_replace('/\s+/', '', substr($source, $start, $end - $start + 1));
+        $text = '';
+        $separated = false;
+        foreach (token_get_all('<?php ' . substr($source, $start, $end - $start + 1)) as $index => $token) {
+            if ($index === 0) {
+                continue; // the open tag added above
+            }
+            $id = is_array($token) ? $token[0] : null;
+            if ($id === T_WHITESPACE || $id === T_COMMENT || $id === T_DOC_COMMENT) {
+                $separated = true;
+                continue;
+            }
+            $piece = is_array($token) ? $token[1] : $token;
+            if ($separated && $text !== '' && preg_match('/\w$/', $text) === 1 && preg_match('/^\w/', $piece) === 1) {
+                $text .= ' ';
+            }
+            $text .= $piece;
+            $separated = false;
+        }
+
+        return $text;
     }
 
     private function describe(string $key): string
