@@ -212,6 +212,56 @@ PHP);
         self::assertSame($before, file_get_contents($this->root . '/src/Service.php'));
     }
 
+    public function testAMissingPlanFileIsNamedPlainly(): void
+    {
+        [$exit, $stderr] = $this->runCli(['apply', 'missing-plan.json']);
+
+        self::assertSame(1, $exit);
+        self::assertStringContainsString('[ERROR] Plan file not found: missing-plan.json', $stderr);
+        self::assertStringNotContainsString('Refactor refactor', $stderr);
+    }
+
+    public function testAMapRootOutsideTheProjectIsRejectedBeforeAnyWrite(): void
+    {
+        $before = (string) file_get_contents($this->root . '/src/Service.php');
+        $outside = sys_get_temp_dir() . '/agent-edit-map-root-' . bin2hex(random_bytes(4));
+        mkdir($outside);
+
+        try {
+            [$exit, $stderr] = $this->runCli(['apply', $this->planPath, '--task=OUTSIDE', '--map-index=' . $this->mapPath, '--map-root=' . $outside]);
+        } finally {
+            rmdir($outside);
+        }
+
+        self::assertSame(1, $exit);
+        self::assertStringContainsString('--map-root must stay inside the project root', $stderr);
+        self::assertDirectoryDoesNotExist($this->root . '/.agent-edit');
+        self::assertSame($before, file_get_contents($this->root . '/src/Service.php'));
+    }
+
+    public function testAnOutputDirectoryNamedThroughASymlinkedRootIsAccepted(): void
+    {
+        $link = sys_get_temp_dir() . '/agent-edit-link-' . bin2hex(random_bytes(4));
+        symlink($this->root, $link);
+
+        try {
+            ob_start();
+            $exit = (new ApplyCommand($link))->run([
+                $this->planPath,
+                '--task=LINKED',
+                '--map-index=' . $this->mapPath,
+                '--output-dir=' . $link . '/.agent-edit/receipts/linked',
+                '--dry-run',
+            ]);
+            ob_end_clean();
+        } finally {
+            unlink($link);
+        }
+
+        self::assertSame(0, $exit);
+        self::assertFileExists($this->root . '/.agent-edit/receipts/linked/' . EditEngine::RECEIPT_FILE);
+    }
+
     public function testAnUnknownOptionNamesTheAcceptedOnes(): void
     {
         $process = proc_open(
@@ -230,5 +280,22 @@ PHP);
         self::assertStringContainsString('Unknown option --label for `agent-edit apply`', $stderr);
         self::assertStringContainsString('--task', $stderr);
         self::assertStringContainsString('--dry-run', $stderr);
+    }
+
+    /**
+     * @param list<string> $arguments
+     *
+     * @return array{int, string}
+     */
+    private function runCli(array $arguments): array
+    {
+        $process = proc_open([PHP_BINARY, dirname(__DIR__) . '/bin/agent-edit', ...$arguments], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $this->root);
+        self::assertIsResource($process);
+        stream_get_contents($pipes[1]);
+        $stderr = (string) stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+
+        return [proc_close($process), $stderr];
     }
 }

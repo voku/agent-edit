@@ -135,6 +135,7 @@ final readonly class EditEngine
         }
         $plan = $this->decodePlan($request->planPath, $planRaw);
         $capability = $this->capability($plan);
+        $this->claimBundle($request->outputDirectory);
         if (!$capability->requiresMap) {
             return $this->applyDirectAndPersist($request, $plan, $planRaw, $capability);
         }
@@ -516,9 +517,37 @@ final readonly class EditEngine
             'restored' => $restored,
             'removed' => $removed,
         ];
+        $this->invalidateVerification($bundlePath);
         $this->writeAtomically($bundlePath . '/' . self::UNDO_RESULT_FILE, $this->json($result));
 
         return $result;
+    }
+
+    /**
+     * A bundle that records an applied plan is evidence of a real mutation: a retry, a dry run or another plan never
+     * overwrites it. Any other bundle may receive a new receipt, but a verification result next to it can only describe
+     * an earlier attempt, so it is removed first.
+     */
+    private function claimBundle(string $bundle): void
+    {
+        $raw = @file_get_contents($bundle . '/' . self::RECEIPT_FILE);
+        $receipt = is_string($raw) ? json_decode($raw, true) : null;
+        if (is_array($receipt) && ($receipt['status'] ?? null) === 'runner_succeeded') {
+            throw new RuntimeException(sprintf(
+                'Bundle %s already records an applied plan and is never overwritten; use a new --task label or --output-dir.',
+                $bundle,
+            ));
+        }
+        $this->invalidateVerification($bundle);
+    }
+
+    /** A verification result describes one applied state; once that state is gone it must not stay readable. */
+    private function invalidateVerification(string $bundle): void
+    {
+        $verification = $bundle . '/' . self::VERIFICATION_FILE;
+        if ((file_exists($verification) || is_link($verification)) && !@unlink($verification)) {
+            throw new RuntimeException('Unable to invalidate the previous verification result in ' . $bundle . '.');
+        }
     }
 
     private function canonicalRelative(string $path): string

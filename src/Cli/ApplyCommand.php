@@ -173,7 +173,7 @@ final readonly class ApplyCommand
             }
             $staged = ['plan' => $planPath, 'created' => $created];
         } else {
-            $planPath = $this->existingFile($root, $plan, 'refactor plan');
+            $planPath = $this->existingFile($root, $plan, 'Plan file');
             $taskId = trim($values['task'] ?? '');
             if ($taskId === '') {
                 $planBytes = file_get_contents($planPath);
@@ -187,10 +187,14 @@ final readonly class ApplyCommand
             $this->assertInsideRoot($root, $output);
         }
 
-        $mapRoot = $this->existingDirectory($root, $values['map-root'] ?? $root, 'map root');
+        $mapRoot = $this->existingDirectory($root, $values['map-root'] ?? $root, 'Map root');
+        if ($mapRoot !== $root && !str_starts_with($mapRoot, $root . '/')) {
+            // `verify` resolves the map root inside the project, so a bundle applied against another tree is unverifiable.
+            throw new InvalidArgumentException('--map-root must stay inside the project root: ' . $mapRoot);
+        }
         $mapIndex = null;
         if (isset($values['map-index']) || $this->planNeedsMap($planPath)) {
-            $mapIndex = $this->existingFile($root, $values['map-index'] ?? MapArtifactPaths::forProject($root)->indexJson(), 'map index');
+            $mapIndex = $this->existingFile($root, $values['map-index'] ?? MapArtifactPaths::forProject($root)->indexJson(), 'Map index');
         }
 
         return [
@@ -269,7 +273,7 @@ final readonly class ApplyCommand
         $resolved = $this->resolvePath($root, $path);
         $real = realpath($resolved);
         if (!is_string($real) || !is_file($real)) {
-            throw new InvalidArgumentException('Refactor ' . $label . ' not found: ' . $path);
+            throw new InvalidArgumentException($label . ' not found: ' . $path);
         }
 
         return str_replace('\\', '/', $real);
@@ -281,7 +285,7 @@ final readonly class ApplyCommand
         $resolved = $this->resolvePath($root, $path);
         $real = realpath($resolved);
         if (!is_string($real) || !is_dir($real)) {
-            throw new InvalidArgumentException('Refactor ' . $label . ' not found: ' . $path);
+            throw new InvalidArgumentException($label . ' not found: ' . $path);
         }
 
         return str_replace('\\', '/', $real);
@@ -296,10 +300,28 @@ final readonly class ApplyCommand
         }
         $path = str_replace('\\', '/', $path);
         if (str_starts_with($path, '/') || preg_match('~^[A-Za-z]:/~', $path) === 1) {
-            return rtrim($path, '/');
+            return $this->canonicalAncestor(rtrim($path, '/'));
         }
 
         return rtrim($root, '/') . '/' . ltrim($path, '/');
+    }
+
+    /**
+     * Resolves symlinks in the deepest existing ancestor of an absolute path, so a path named through a symlinked
+     * directory (a shell's `$PWD`, macOS `/tmp`) compares equal to the real project root it points into.
+     */
+    private function canonicalAncestor(string $path): string
+    {
+        $suffix = '';
+        for ($ancestor = $path; !file_exists($ancestor); $ancestor = dirname($ancestor)) {
+            if (dirname($ancestor) === $ancestor) {
+                return $path;
+            }
+            $suffix = '/' . basename($ancestor) . $suffix;
+        }
+        $real = realpath($ancestor);
+
+        return is_string($real) ? rtrim(str_replace('\\', '/', $real), '/') . $suffix : $path;
     }
 
     /** Prints the supported agent-edit apply CLI contract. */

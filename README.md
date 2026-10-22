@@ -48,9 +48,28 @@ vendor/bin/agent-edit schema                                           # JSON Sc
 What agent-edit proves before anything is written (`--dry-run` stops here):
 
 - **Anchors.** `find` must occur exactly once (or be picked with `occurrence`, or replaced everywhere with `all`). A refusal says what to do next: the line numbers of an ambiguous match, the line where the same text exists with different whitespace or line endings, or the closest line when the text differs. Optional `expected_source_sha256` refuses a file that changed since it was read.
-- **Syntax.** Every rewritten or created `.php` file is staged and `php -l` checked; publication is all-or-nothing and every file is restored on any failure.
+- **Syntax.** Every rewritten `.php` file is parsed before anything is staged, so a dry run already refuses a broken result and names its line; every rewritten or created `.php` file is then staged and `php -l` checked; publication is all-or-nothing and every file is restored on any failure.
 - **API changes need caller evidence.** A token-level guard compares the declarations before and after. Removing or renaming a class, function or non-private method, or changing a signature (parameters, types, defaults, visibility), is refused with a pointer to the matching `agent-map` plan. After checking the callers by other means, `"allow_signature_change": true` (`--allow-signature-change`) applies it and records the acknowledged changes in the receipt. Bodies, private methods, properties and additions are never reported.
 - **Scope.** Unknown keys, absolute or `..` paths, `.git/` and `.agent-edit/` targets, binary files, symlinks and paths that leave the project root are refused.
+
+### Symbol-addressed edits
+
+Exact text is the most general anchor, but for PHP it is also the most fragile: the agent has to copy a whole method byte for byte, including its indentation, to change three lines of its body. An edit can therefore name a declaration instead and let agent-edit find it in the current source (`"op"` selects the edit kind; without it an edit is the `find` / `replace` form above):
+
+```json
+{"type":"source_edit_plan","contract_version":"1.0","target_id":"trim names",
+ "edits":[
+  {"op":"replace_body",   "path":"src/Greeter.php","symbol":"Greeter::greet()","code":"$name = trim($name);\n\nreturn 'Hello ' . $name;"},
+  {"op":"replace_symbol", "path":"src/Greeter.php","symbol":"Greeter::$count","code":"private int $count = 1;"},
+  {"op":"insert_member",  "path":"src/Greeter.php","symbol":"Greeter","after":"greet()","code":"public function bye(): string\n{\n    return 'bye';\n}"},
+  {"op":"remove_symbol",  "path":"src/Greeter.php","symbol":"Greeter::unused()"},
+  {"op":"add_use",        "path":"src/Greeter.php","name":"App\\Model\\User"}]}
+```
+
+- **Symbols** are `Class`, `Class::method()`, `Class::$property`, `Class::CONSTANT`, `Enum::CASE` or `function()`, with a short or fully qualified class name. An unknown or ambiguous symbol is refused with the list of declarations the file really has.
+- **Code is re-indented** to its target and keeps the file's line ending, so it can be written at any indentation (`"reindent": false` keeps it verbatim). In `replace_symbol` an omitted doc comment or attribute list keeps the existing one; code that brings its own replaces it.
+- `replace_body` keeps the signature; `insert_member` adds at the `"position"` `start` or `end` (default), or `after` / `before` a member, with one blank line of separation; `remove_symbol` removes the declaration with its doc comment and attributes and leaves no doubled or dangling blank line; `add_use` inserts a namespace-level import in sorted position and is a no-op when it already exists.
+- Like `find`, every symbol edit resolves against the file **as read**, not against the result of earlier edits, and is reduced to the smallest changed byte range: edits of one file must not overlap, and the API guard, syntax check, transaction, receipt and `undo` apply unchanged. `remove_symbol` does not look for callers, so removing a non-private method still needs `allow_signature_change` or, better, an `agent-map` removal plan.
 
 The receipt (`execution.json`) binds the plan hash, Git-observed `changed_files` and, per file, the digest before and after plus a pre-image under `before/`. `verify` re-proves the plan is unchanged, every file still has the published digest, PHP still parses and the observed changed files are exactly the plan's files. `undo` restores the pre-images and removes created files only while every touched file still has the digest the edit published, so later work is never overwritten; an undone bundle no longer verifies. Files Git ignores (local config, generated code) cannot appear in `git status`: they are proven by digest only and listed in `git_ignored_files_proven_by_digest_only`. Without Git the verdict is `incomplete` / `scope_unproven` (exit code 3), as for Map plans.
 
@@ -58,7 +77,7 @@ Direct edits and Map plans are complementary, not interchangeable:
 
 | Change | Use |
 | --- | --- |
-| Body fix, config/doc text, new file, private-method change | `source_edit_plan` (`edit` / `apply -`) |
+| Body fix, config/doc text, new file, private-method change | `source_edit_plan` (`edit` / `apply -`), with `replace_body`, `insert_member`, `add_use` ... for PHP |
 | Rename, move or remove a class/method/property/constant | the matching `agent-map` plan, then `apply` |
 | Signature change whose callers you checked yourself | `source_edit_plan` with `allow_signature_change` |
 

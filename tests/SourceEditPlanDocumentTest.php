@@ -119,12 +119,20 @@ final class SourceEditPlanDocumentTest extends TestCase
         self::assertJson($json);
         self::assertFalse($schema['additionalProperties']);
         self::assertSame(['allow_signature_change', 'contract_version', 'creates', 'edits', 'target_id', 'type'], $this->sorted(array_keys($schema['properties'])));
+        $variants = $schema['properties']['edits']['items']['oneOf'];
         self::assertSame(
-            ['all', 'expected_source_sha256', 'find', 'occurrence', 'path', 'replace'],
-            $this->sorted(array_keys($schema['properties']['edits']['items']['properties'])),
+            ['all', 'expected_source_sha256', 'find', 'occurrence', 'op', 'path', 'replace'],
+            $this->sorted(array_keys($variants[0]['properties'])),
         );
+        self::assertSame(['path', 'find', 'replace'], $variants[0]['required']);
+        foreach (array_slice($variants, 1) as $variant) {
+            [$required, $optional] = SourceEditPlanDocument::SYMBOL_OPERATIONS[$variant['properties']['op']['const']];
+            self::assertSame(
+                $this->sorted(['op', 'path', 'expected_source_sha256', ...$required, ...$optional]),
+                $this->sorted(array_keys($variant['properties'])),
+            );
+        }
         self::assertSame(['content', 'path'], $this->sorted(array_keys($schema['properties']['creates']['items']['properties'])));
-        self::assertSame(['path', 'find', 'replace'], $schema['properties']['edits']['items']['required']);
     }
 
     /**
