@@ -92,8 +92,9 @@ final readonly class MethodInsertionPlanDocument implements EditMovePlanEvidence
                 if (!str_starts_with($edit->symbolId, 'use:') || $edit->resolution !== $dependencyResolution || !$edit->isInsertion()) {
                     throw new RuntimeException($type . ' dependency insertion has unexpected evidence.');
                 }
-                // The planner prefixes a blank line when the destination has no import yet; nothing else is allowed.
-                if (preg_match('/\A\n?use [A-Za-z_\\\\\x80-\xff][A-Za-z0-9_\\\\\x80-\xff]*;\n\z/D', $edit->replacement) !== 1
+                // The planner prefixes a blank line when the destination has no import yet; nothing else is allowed. Line
+                // breaks follow the destination file, so a CRLF file gets CRLF.
+                if (preg_match('/\A(?:\r?\n)?use [A-Za-z_\\\\\x80-\xff][A-Za-z0-9_\\\\\x80-\xff]*;\r?\n\z/D', $edit->replacement) !== 1
                     || $edit->symbolId !== 'use:' . substr(trim($edit->replacement), 4, -1)
                 ) {
                     throw new RuntimeException($type . ' use import edit must insert exactly one plain `use` statement.');
@@ -246,7 +247,7 @@ final readonly class MethodInsertionPlanDocument implements EditMovePlanEvidence
         $newline = $anchor === false ? false : strpos($source, "\n", $anchor);
         $slot = $newline === false ? null : $newline + 1;
         foreach ($imports as $import) {
-            if ($statements === null || $import->startFilePos !== $slot || str_starts_with($import->replacement, "\n") !== ($lastUse === null)) {
+            if ($statements === null || $import->startFilePos !== $slot || (preg_match('/\A\r?\n/', $import->replacement) === 1) !== ($lastUse === null)) {
                 throw new EditFailure(
                     'The use import edit is not at the destination file\'s import slot (byte ' . ($slot ?? 'none') . '); refresh the Map and re-plan.',
                     FailureCode::EvidenceChanged,
