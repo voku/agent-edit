@@ -144,7 +144,7 @@ final readonly class TextLayout
         }
 
         $line = 0;
-        $heredoc = false;
+        $heredocDepth = 0;
         $quoted = false;
         $first = true;
         foreach (\PhpToken::tokenize("<?php\n" . $code) as $token) {
@@ -153,15 +153,15 @@ final readonly class TextLayout
                 continue;
             }
             if ($token->id === T_START_HEREDOC) {
-                $heredoc = true;
+                ++$heredocDepth; // a heredoc can nest in another one's `{$a[<<<X ... X]}` interpolation
             } elseif ($token->id === T_END_HEREDOC) {
-                $heredoc = false;
-            } elseif (!$heredoc && ($token->text === '"' || $token->text === '`')) {
+                $heredocDepth = max(0, $heredocDepth - 1);
+            } elseif ($heredocDepth === 0 && ($token->text === '"' || $token->text === '`')) {
                 $quoted = !$quoted;
             }
 
             $breaks = substr_count($token->text, "\n");
-            if ($breaks > 0 && !$heredoc && $token->id !== T_START_HEREDOC) {
+            if ($breaks > 0 && $heredocDepth === 0 && $token->id !== T_START_HEREDOC) {
                 $spansLines = $quoted || $token->id === T_CONSTANT_ENCAPSED_STRING || $token->id === T_ENCAPSED_AND_WHITESPACE;
                 if ($spansLines) {
                     for ($offset = 1; $offset <= $breaks && $line + $offset < $lines; ++$offset) {

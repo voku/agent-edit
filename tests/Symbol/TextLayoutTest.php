@@ -87,6 +87,7 @@ final class TextLayoutTest extends TestCase
         yield 'backtick in a comment is not a string' => ["function f(): string\n{\n    // `not a string\n    return 'ok';\n}", $any];
         // A heredoc marker indented with tabs over space-indented code would mix both in one marker; PHP refuses that.
         yield 'string after a heredoc' => ["function f(): string\n{\n    \$h = <<<TXT\n    in\n    TXT;\n\n    return \$h . 'a\n b';\n}", ['', '    ']];
+        yield 'heredoc nested in a heredoc interpolation' => ["function f(): string\n{\n    \$a = ['key' => 'v'];\n    return <<<OUTER\n    before\n    {\$a[<<<INNER\n    key\n    INNER]}\n    after\n    OUTER;\n}", ['', '    ']];
         yield 'escaped quotes' => ["function f(): string\n{\n    return 'it\\'s\n  here' . \"say \\\"hi\\\"\n  now\";\n}", $any];
     }
 
