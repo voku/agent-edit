@@ -61,6 +61,30 @@ final class DirectEditCliTest extends TestCase
         self::assertStringContainsString('already undone', $again['stderr']);
     }
 
+    public function testMultiLineLfTextEditsACrLfFileAndReceiptAndUndoUseTheRealBytes(): void
+    {
+        $this->initGit();
+        $crlf = str_replace("\n", "\r\n", self::SOURCE);
+        file_put_contents($this->root . '/src/Calc.php', $crlf);
+        file_put_contents($this->root . '/find.txt', "    public function twice(int \$a): int\n    {\n        return \$a * 2;\n    }\n");
+        file_put_contents($this->root . '/replace.txt', "    public function twice(int \$a): int\n    {\n        \$doubled = \$a * 2;\n\n        return \$doubled;\n    }\n");
+
+        $edit = $this->cli(['edit', 'src/Calc.php', '--find-file=find.txt', '--replace-file=replace.txt', '--task', 'crlf']);
+        self::assertSame(0, $edit['exit'], $edit['stderr']);
+        $after = $this->read('src/Calc.php');
+        self::assertStringContainsString("        \$doubled = \$a * 2;\r\n\r\n        return \$doubled;\r\n", $after);
+        self::assertSame(substr_count($after, "\n"), substr_count($after, "\r\n"), 'every line break is still CRLF');
+        $execution = json_decode($this->read('.agent-edit/receipts/crlf/execution.json'), true, 512, JSON_THROW_ON_ERROR);
+        self::assertStringContainsString(hash('sha256', $crlf), json_encode($execution, JSON_THROW_ON_ERROR));
+
+        $verify = $this->cli(['verify', '--bundle=.agent-edit/receipts/crlf']);
+        self::assertSame(0, $verify['exit'], $verify['stderr']);
+
+        $undo = $this->cli(['undo', '--bundle=.agent-edit/receipts/crlf']);
+        self::assertSame(0, $undo['exit'], $undo['stderr']);
+        self::assertSame($crlf, $this->read('src/Calc.php'));
+    }
+
     public function testSuccessfulEditPrintsTheFilesAndReadyToRunVerifyAndUndoCommands(): void
     {
         $result = $this->cli(['edit', 'src/Calc.php', '--find=return $a - $b;', '--replace=return $a + $b;', '--task', 'hints']);

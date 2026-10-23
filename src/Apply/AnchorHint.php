@@ -30,6 +30,20 @@ final class AnchorHint
         return $offsets;
     }
 
+    /**
+     * The `\r\n` spelling of a multi-line `find` written with bare `\n`, only when that is the file's own spelling:
+     * every line break of `$content` is `\r\n` and `$find` has none. A file that mixes both has no spelling to adopt,
+     * so no conversion is offered there. The caller matches the converted text exactly and still checks uniqueness.
+     */
+    public static function crlfVariant(string $content, string $find): ?string
+    {
+        if (!str_contains($find, "\n") || str_contains($find, "\r") || !str_contains($content, "\r\n")) {
+            return null;
+        }
+
+        return substr_count($content, "\n") === substr_count($content, "\r\n") ? str_replace("\n", "\r\n", $find) : null;
+    }
+
     /** @param list<int> $offsets */
     public static function ambiguous(string $path, string $content, string $find, array $offsets): string
     {
@@ -47,6 +61,9 @@ final class AnchorHint
     public static function missing(string $path, string $content, string $find): string
     {
         $base = '`find` does not occur in ' . $path;
+        if (str_contains($find, "\n") && !str_contains($find, "\r") && str_contains($content, "\r\n") && substr_count($content, "\n") !== substr_count($content, "\r\n")) {
+            $base .= ' (the file mixes LF and CRLF line endings, so a multi-line `find` is not converted: match a single line, or write the line breaks exactly as the file has them)';
+        }
 
         $pattern = self::whitespaceInsensitivePattern($find);
         if ($pattern !== null && preg_match($pattern, $content, $match, PREG_OFFSET_CAPTURE) === 1) {

@@ -388,10 +388,23 @@ final readonly class PhpSourceEditor
                 }
             }
             $indent = $layout->indentAt($anchor->getStartFilePos());
-            $at = $insertBefore !== null ? $layout->lineStart($insertBefore->getStartFilePos()) : $layout->nextLineStart($anchor->getEndFilePos());
+            $at = $insertBefore !== null ? $layout->lineStart($insertBefore->getStartFilePos()) : $this->lineStartAfterImport($content, $layout, $anchor, $path);
 
             return [
                 'range' => [$at, $at, $indent . $statement . $eol],
+                'summary' => sprintf('imported %s', $name),
+            ];
+        }
+
+        // A kind without imports yet opens its own block after the blocks of the kinds that precede it (PSR-12 and
+        // PER-CS: class, function, const). Before them it would sit above the class imports of the file.
+        $before = $this->lastImportOfEarlierKind($symbols->imports, $type);
+        if ($before !== null) {
+            $at = $this->lineStartAfterImport($content, $layout, $before, $path);
+            $blankFollows = trim($layout->lineAt($at)) === '';
+
+            return [
+                'range' => [$at, $at, $eol . $layout->indentAt($before->getStartFilePos()) . $statement . $eol . ($blankFollows ? '' : $eol)],
                 'summary' => sprintf('imported %s', $name),
             ];
         }
@@ -402,6 +415,44 @@ final readonly class PhpSourceEditor
             'range' => [$at, $at, $text],
             'summary' => sprintf('imported %s', $name),
         ];
+    }
+
+    /**
+     * Where a new import goes when it follows `$import`: the start of the next line. Refused when PHP is closed on the
+     * import's line (`use A\\One; ?>`), because that offset is outside the PHP tags and the import would be output text.
+     */
+    private function lineStartAfterImport(string $content, TextLayout $layout, Stmt\Use_|Stmt\GroupUse $import, string $path): int
+    {
+        $end = $import->getEndFilePos();
+        $at = $layout->nextLineStart($end);
+        if (str_contains(substr($content, $end + 1, $at - $end - 1), '?>')) {
+            throw new SymbolEditException($path . ' closes PHP on the line of its last import; add the import with replace_text.');
+        }
+
+        return $at;
+    }
+
+    /**
+     * The last statement of the nearest preceding kind (class < function < const) that has imports in the file. A
+     * statement mixing kinds in one group belongs to no kind.
+     *
+     * @param list<Stmt\Use_|Stmt\GroupUse> $imports
+     */
+    private function lastImportOfEarlierKind(array $imports, int $type): Stmt\Use_|Stmt\GroupUse|null
+    {
+        $rank = [Stmt\Use_::TYPE_NORMAL => 0, Stmt\Use_::TYPE_FUNCTION => 1, Stmt\Use_::TYPE_CONSTANT => 2];
+        $found = null;
+        $foundRank = -1;
+        foreach ($imports as $use) {
+            $types = array_unique(array_column($this->importItems($use), 0));
+            $candidate = count($types) === 1 ? ($rank[$types[0]] ?? null) : null;
+            if ($candidate !== null && $candidate < $rank[$type] && $candidate >= $foundRank) {
+                $found = $use;
+                $foundRank = $candidate;
+            }
+        }
+
+        return $found;
     }
 
     /**

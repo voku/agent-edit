@@ -116,6 +116,22 @@ final class DirectEditFailureCodesTest extends TestCase
         self::assertStringContainsString('allow_signature_change', $error['hint']);
     }
 
+    public function testRemovingAPublicConstantNeedsCallerEvidenceToo(): void
+    {
+        $source = "<?php\n\nfinal class Limits\n{\n    public const MAX = 10;\n    public int \$used = 0;\n}\n";
+        $this->write('src/Limits.php', $source);
+
+        $refused = $this->cli(['edit', 'src/Limits.php', '--find=    public const MAX = 10;' . "\n", '--replace=', '--format=json']);
+        self::assertSame(1, $refused['exit'], $refused['stdout']);
+        self::assertSame('api_change_refused', $refused['json']['error']['code'] ?? null);
+        self::assertStringContainsString('constant `Limits::MAX`', implode("\n", $refused['json']['error']['details']['changes'] ?? []));
+        self::assertSame($source, $this->read('src/Limits.php'));
+
+        $allowed = $this->cli(['edit', 'src/Limits.php', '--find=    public const MAX = 10;' . "\n", '--replace=', '--allow-signature-change', '--format=json']);
+        self::assertSame(0, $allowed['exit'], $allowed['stdout']);
+        self::assertStringNotContainsString('MAX', $this->read('src/Limits.php'));
+    }
+
     public function testAcknowledgingTheSignatureChangeAppliesIt(): void
     {
         $run = $this->cli(['edit', 'src/Calc.php', '--find=public function add(int $a, int $b): int', '--replace=public function add(int $a, int $b, int $c = 0): int', '--allow-signature-change', '--format=json']);

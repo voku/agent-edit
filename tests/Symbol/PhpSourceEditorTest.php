@@ -412,8 +412,93 @@ PHP, $result['content']);
         self::assertStringContainsString("use Other\\User as OtherUser;\n", $aliased['content']);
 
         $function = $this->edit(self::SERVICE, ['op' => 'add_use', 'name' => 'Vendor\helper', 'kind' => 'function']);
-        self::assertStringContainsString("namespace App\\Service;\n\nuse function Vendor\\helper;\n\nuse App\\Model\\User;", $function['content']);
+        // PSR-12 / PER-CS order: class imports, then function imports, then constant imports, one block each.
+        self::assertStringContainsString("use App\\Model\\User;\nuse Psr\\Log\\LoggerInterface;\n\nuse function Vendor\\helper;\n\n/** Greets users. */", $function['content']);
         $this->assertParses($function['content']);
+    }
+
+    public function testAddUseOpensFunctionAndConstBlocksAfterTheBlocksOfEarlierKinds(): void
+    {
+        $classes = "<?php\n\nnamespace App;\n\nuse A\\One;\nuse B\\Two;\n\nfinal class C {}\n";
+        $function = $this->edit($classes, ['op' => 'add_use', 'name' => 'V\\f', 'kind' => 'function'], 'c.php')['content'];
+        self::assertSame("<?php\n\nnamespace App;\n\nuse A\\One;\nuse B\\Two;\n\nuse function V\\f;\n\nfinal class C {}\n", $function);
+
+        $const = $this->edit($function, ['op' => 'add_use', 'name' => 'V\\K', 'kind' => 'const'], 'c.php')['content'];
+        self::assertSame("<?php\n\nnamespace App;\n\nuse A\\One;\nuse B\\Two;\n\nuse function V\\f;\n\nuse const V\\K;\n\nfinal class C {}\n", $const);
+
+        // A function block that already exists is followed by the const block, a class block is not displaced.
+        $functionOnly = "<?php\n\nnamespace App;\n\nuse function V\\f;\n\nfinal class C {}\n";
+        self::assertSame(
+            "<?php\n\nnamespace App;\n\nuse A\\One;\n\nuse function V\\f;\n\nfinal class C {}\n",
+            $this->edit($functionOnly, ['op' => 'add_use', 'name' => 'A\\One'], 'c.php')['content'],
+        );
+        self::assertSame(
+            "<?php\n\nnamespace App;\n\nuse function V\\f;\n\nuse const V\\K;\n\nfinal class C {}\n",
+            $this->edit($functionOnly, ['op' => 'add_use', 'name' => 'V\\K', 'kind' => 'const'], 'c.php')['content'],
+        );
+
+        // Without a blank line between the blocks no blank line is invented where the code follows directly.
+        $tight = "<?php\nnamespace App;\nuse A\\One;\nuse const V\\K;\nfinal class C {}\n";
+        self::assertSame(
+            "<?php\nnamespace App;\nuse A\\One;\n\nuse function V\\f;\n\nuse const V\\K;\nfinal class C {}\n",
+            $this->edit($tight, ['op' => 'add_use', 'name' => 'V\\f', 'kind' => 'function'], 'c.php')['content'],
+        );
+    }
+
+    public function testAddUseRefusesToOpenALaterKindBlockAfterAnImportThatEndsPhpOnItsLine(): void
+    {
+        // The next line start would be outside the PHP tags: the new import would be output text.
+        $source = "<?php\nnamespace App;\nuse A\\One; ?>\nhtml\n";
+
+        $this->expectException(SymbolEditException::class);
+        $this->expectExceptionMessage('replace_text');
+        $this->edit($source, ['op' => 'add_use', 'name' => 'V\\f', 'kind' => 'function'], 'c.php');
+    }
+
+    public function testAddUseRefusesToAppendToABlockWhoseLastImportEndsPhpOnItsLine(): void
+    {
+        $source = "<?php\nnamespace App;\nuse A\\One; ?>\nhtml\n";
+
+        $this->expectException(SymbolEditException::class);
+        $this->expectExceptionMessage('replace_text');
+        $this->edit($source, ['op' => 'add_use', 'name' => 'Z\\Two'], 'c.php');
+    }
+
+    public function testAddUseStillInsertsBeforeAnImportThatEndsPhpOnItsLineAndAppendsToOrdinaryBlocks(): void
+    {
+        // Sorted block, new name sorts first: inserted at the start of the existing import's line, inside PHP.
+        $closing = "<?php\nnamespace App;\nuse M\\One; ?>\nhtml\n";
+        self::assertSame(
+            "<?php\nnamespace App;\nuse A\\First;\nuse M\\One; ?>\nhtml\n",
+            $this->edit($closing, ['op' => 'add_use', 'name' => 'A\\First'], 'c.php')['content'],
+        );
+
+        // An ordinary block (no closing tag on the last import's line) is appended to as before.
+        $ordinary = "<?php\nnamespace App;\nuse A\\One;\nuse B\\Two; // note\n\nfinal class C {}\n";
+        self::assertSame(
+            "<?php\nnamespace App;\nuse A\\One;\nuse B\\Two; // note\nuse C\\Three;\n\nfinal class C {}\n",
+            $this->edit($ordinary, ['op' => 'add_use', 'name' => 'C\\Three'], 'c.php')['content'],
+        );
+    }
+
+    public function testAddUseStillOpensALaterKindBlockWhenTheImportLineEndsWithAComment(): void
+    {
+        $source = "<?php\nnamespace App;\nuse A\\One; // why\n\nfinal class C {}\n";
+
+        self::assertSame(
+            "<?php\nnamespace App;\nuse A\\One; // why\n\nuse function V\\f;\n\nfinal class C {}\n",
+            $this->edit($source, ['op' => 'add_use', 'name' => 'V\\f', 'kind' => 'function'], 'c.php')['content'],
+        );
+    }
+
+    public function testAddUseKeepsTheLineEndingWhenOpeningALaterKindBlock(): void
+    {
+        $crlf = "<?php\r\n\r\nnamespace App;\r\n\r\nuse A\\One;\r\n\r\nfinal class C {}\r\n";
+
+        self::assertSame(
+            "<?php\r\n\r\nnamespace App;\r\n\r\nuse A\\One;\r\n\r\nuse function V\\f;\r\n\r\nfinal class C {}\r\n",
+            $this->edit($crlf, ['op' => 'add_use', 'name' => 'V\\f', 'kind' => 'function'], 'c.php')['content'],
+        );
     }
 
     public function testAddUseKnowsGroupedImports(): void

@@ -232,7 +232,17 @@ final readonly class SourceEditPlanApplier implements MaplessPlanApplier
             return $this->resolveSymbol($edit->symbolOperation, $edit->path, $content, $position);
         }
 
-        $offsets = AnchorHint::offsets($content, $edit->find);
+        $find = $edit->find;
+        $replace = $edit->replace;
+        $offsets = AnchorHint::offsets($content, $find);
+        if ($offsets === [] && ($crlf = AnchorHint::crlfVariant($content, $find)) !== null) {
+            // The file is CRLF throughout and the multi-line text was written with LF: match and write it in the file's own line ending.
+            $offsets = AnchorHint::offsets($content, $crlf);
+            if ($offsets !== []) {
+                $find = $crlf;
+                $replace = str_replace("\n", "\r\n", str_replace("\r\n", "\n", $replace));
+            }
+        }
         if ($offsets === []) {
             throw new EditFailure(sprintf('edits[%d]: %s', $position, AnchorHint::missing($edit->path, $content, $edit->find)), FailureCode::AnchorMissing, ['path' => $edit->path, 'edit' => $position]);
         }
@@ -251,7 +261,7 @@ final readonly class SourceEditPlanApplier implements MaplessPlanApplier
         }
 
         return array_map(
-            static fn (int $offset): array => [$offset, $offset + strlen($edit->find), $edit->replace],
+            static fn (int $offset): array => [$offset, $offset + strlen($find), $replace],
             $selected,
         );
     }
