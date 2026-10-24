@@ -197,6 +197,7 @@ final readonly class FileTransaction
             if (!is_string($real) || !str_starts_with(str_replace('\\', '/', $real), $realRoot . '/')) {
                 throw new RuntimeException('File transaction path escapes the project root: ' . $this->display($realRoot, $path));
             }
+            $this->assertNotProtected($realRoot, $real, $path);
             $hash = hash_file('sha256', $path);
             if (!is_string($hash) || !hash_equals((string) $operation->expectedSha256, $hash)) {
                 throw new RuntimeException('File changed since it was read; re-read it and re-plan: ' . $this->display($realRoot, $path));
@@ -221,6 +222,20 @@ final readonly class FileTransaction
         $real = is_string($real) ? rtrim(str_replace('\\', '/', $real), '/') : '';
         if ($real !== $realRoot && !str_starts_with($real, $realRoot . '/')) {
             throw new RuntimeException('Parent of a created file escapes the project root: ' . $this->display($realRoot, $path));
+        }
+        $this->assertNotProtected($realRoot, $real, $path);
+    }
+
+    /**
+     * Refuses writes whose resolved location is inside .git or .agent-edit, even when reached through a symlinked
+     * directory or a differently cased name.
+     */
+    private function assertNotProtected(string $realRoot, string $real, string $path): void
+    {
+        $relative = ltrim(substr(str_replace('\\', '/', $real), strlen($realRoot)), '/');
+        $first = strtolower(explode('/', $relative)[0]);
+        if ($first === '.git' || $first === '.agent-edit') {
+            throw new RuntimeException('File transaction path is protected: ' . $this->display($realRoot, $path));
         }
     }
 
