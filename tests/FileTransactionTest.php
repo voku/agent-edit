@@ -247,6 +247,46 @@ final class FileTransactionTest extends TestCase
         }
     }
 
+    public function testRefusesProtectedMetadataTargetsDirectlyAndThroughSymlinks(): void
+    {
+        mkdir($this->root . '/.git', 0o775, true);
+        mkdir($this->root . '/.agent-edit/receipts', 0o775, true);
+        file_put_contents($this->root . '/.git/config', 'git metadata');
+        file_put_contents($this->root . '/.agent-edit/receipts/execution.json', 'edit receipt');
+
+        $gitLink = $this->root . '/git-metadata';
+        $editLink = $this->root . '/edit-metadata';
+        if (!@symlink($this->root . '/.git', $gitLink) || !@symlink($this->root . '/.agent-edit', $editLink)) {
+            if (is_link($gitLink)) {
+                unlink($gitLink);
+            }
+            if (is_link($editLink)) {
+                unlink($editLink);
+            }
+            self::markTestSkipped('symlink() is not available.');
+        }
+
+        $targets = [
+            $this->root . '/.git/config',
+            $this->root . '/.agent-edit/receipts/execution.json',
+            $gitLink . '/config',
+            $editLink . '/receipts/execution.json',
+        ];
+        foreach ($targets as $target) {
+            $before = file_get_contents($target);
+            self::assertIsString($before);
+            try {
+                (new FileTransaction())->run([
+                    FileOperation::write($target, 'attacker-controlled replacement', hash('sha256', $before)),
+                ], $this->root);
+                self::fail('Protected transaction targets must be refused.');
+            } catch (RuntimeException $exception) {
+                self::assertStringContainsString('path is protected', $exception->getMessage());
+            }
+            self::assertSame($before, file_get_contents($target));
+        }
+    }
+
     public function testRejectsDuplicatePathsAndEmptyTransactions(): void
     {
         try {
