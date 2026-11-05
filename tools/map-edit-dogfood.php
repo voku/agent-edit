@@ -399,7 +399,11 @@ PHP;
             'src/Other.php' => php("final class Other\n{\n}"),
         ]);
         $build($dir);
-        must($dir, $map . " method-move-plan 'Demo\\Owner::render' 'Demo\\Other' --index .agent-map/php-symbols.json --format json > plan.json");
+        [$planExit, $planOut] = sh($dir, $map . " method-move-plan 'Demo\\Owner::render' 'Demo\\Other' --index .agent-map/php-symbols.json --format json > plan.json");
+        if ($planExit === 0 || !is_file($dir . '/plan.json') || filesize($dir . '/plan.json') === 0) {
+            fwrite(STDERR, "method-move-owner-dependent: blocked planner must return a nonzero status and JSON evidence: {$planOut}\n");
+            exit(1);
+        }
         $plan = json_decode((string) file_get_contents($dir . '/plan.json'), true, 512, JSON_THROW_ON_ERROR);
         if (($plan['status'] ?? null) !== 'blocked' || ($plan['blockers'] ?? []) === []) {
             fwrite(STDERR, "method-move-owner-dependent: unsafe owner dependency was not blocked.\n");
@@ -421,7 +425,11 @@ PHP;
             'src/Modern/Service.php' => php("final class Service\n{\n}", 'App\\Modern'),
         ]);
         $build($dir);
-        must($dir, $map . " class-move-plan 'App\\Legacy\\Service' 'App\\Modern\\Service' --index .agent-map/php-symbols.json --format json > plan.json");
+        [$planExit, $planOut] = sh($dir, $map . " class-move-plan 'App\\Legacy\\Service' 'App\\Modern\\Service' --index .agent-map/php-symbols.json --format json > plan.json");
+        if ($planExit === 0 || !is_file($dir . '/plan.json') || filesize($dir . '/plan.json') === 0) {
+            fwrite(STDERR, "class-move-target-collision: blocked planner must return a nonzero status and JSON evidence: {$planOut}\n");
+            exit(1);
+        }
         $plan = json_decode((string) file_get_contents($dir . '/plan.json'), true, 512, JSON_THROW_ON_ERROR);
         if (($plan['status'] ?? null) !== 'blocked' || ($plan['blockers'] ?? []) === []) {
             fwrite(STDERR, "class-move-target-collision: existing destination was not blocked.\n");
