@@ -194,6 +194,41 @@ $scenarios = [
             assertContains($dir, 'src/Destination.php', 'function normalizeCopy');
         },
     ),
+    // Released agent-map 0.22.6 must extract only importable class names from type expressions.
+    // Older planners could emit invalid use statements from native nullable / PHPDoc generic types.
+    'method-copy-composite-types' => static fn () => $happy(
+        'method-copy-composite-types',
+        [
+            'src/Source.php' => php(<<<'PHP'
+final class Source
+{
+    /**
+     * @param int|null $value
+     * @return array<string, mixed>
+     */
+    public static function wrap(?int $value): array
+    {
+        return ['value' => $value];
+    }
+}
+PHP),
+            'src/Destination.php' => php("final class Destination\n{\n}"),
+        ],
+        "method-copy-plan 'Demo\\Source::wrap' 'Demo\\Destination' --name=wrapCopy",
+        'method_copy_plan',
+        static function (string $dir): void {
+            assertContains($dir, 'src/Source.php', 'function wrap(?int $value): array');
+            assertContains($dir, 'src/Destination.php', 'function wrapCopy(?int $value): array');
+            assertContains($dir, 'src/Destination.php', '@return array<string, mixed>');
+            $destination = (string) file_get_contents($dir . '/src/Destination.php');
+            foreach (['use int', 'use array', 'use mixed', 'use ?'] as $invalidImport) {
+                if (str_contains($destination, $invalidImport)) {
+                    fwrite(STDERR, "method-copy-composite-types: invalid import $invalidImport\n");
+                    exit(1);
+                }
+            }
+        },
+    ),
     'method-scaffold' => static fn () => $happy(
         'method-scaffold',
         ['src/Destination.php' => php("final class Destination\n{\n}")],
