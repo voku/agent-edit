@@ -9,6 +9,7 @@ use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use voku\AgentEdit\Plan\ClassConstantRemovalPlanDocument;
 use voku\AgentEdit\Plan\ClassMovePlanDocument;
+use voku\AgentEdit\Plan\MethodCopyPlanDocument;
 use voku\AgentEdit\Plan\MethodMovePlanDocument;
 use voku\AgentEdit\Plan\MethodRemovalPlanDocument;
 use voku\AgentEdit\Plan\PlanRefusal;
@@ -24,6 +25,7 @@ final class PlanRefusalTest extends TestCase
         yield 'rename' => [RenamePlanDocument::class, 'method_rename_plan', 'Rename plan'];
         yield 'class move' => [ClassMovePlanDocument::class, 'class_move_plan', 'Class move plan'];
         yield 'method move' => [MethodMovePlanDocument::class, 'method_move_plan', 'Method move plan'];
+        yield 'method copy' => [MethodCopyPlanDocument::class, 'method_copy_plan', 'Method copy plan'];
         yield 'method removal' => [MethodRemovalPlanDocument::class, 'method_removal_plan', 'Method removal plan'];
         yield 'property removal' => [PropertyRemovalPlanDocument::class, 'property_removal_plan', 'Property removal plan'];
         yield 'class constant removal' => [ClassConstantRemovalPlanDocument::class, 'class_constant_removal_plan', 'Class-constant removal plan'];

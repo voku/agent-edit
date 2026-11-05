@@ -25,8 +25,11 @@ final readonly class RenamePlanEditEvidence
     }
 
     /** @param array<string, mixed> $data */
-    public static function fromArray(array $data, bool $allowEmptyReplacement = false): self
-    {
+    public static function fromArray(
+        array $data,
+        bool $allowEmptyReplacement = false,
+        bool $allowEmptyExpected = false,
+    ): self {
         $edit = new self(
             path: self::string($data, 'path'),
             sourceSha256: self::string($data, 'source_sha256'),
@@ -34,7 +37,7 @@ final readonly class RenamePlanEditEvidence
             endFilePos: self::integer($data, 'end_file_pos'),
             lineStart: self::integer($data, 'line_start'),
             lineEnd: self::integer($data, 'line_end'),
-            expected: self::string($data, 'expected'),
+            expected: self::string($data, 'expected', $allowEmptyExpected),
             replacement: self::string($data, 'replacement', $allowEmptyReplacement),
             role: self::string($data, 'role'),
             symbolId: self::string($data, 'symbol_id'),

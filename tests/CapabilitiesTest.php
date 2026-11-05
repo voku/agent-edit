@@ -27,6 +27,7 @@ final class CapabilitiesTest extends TestCase
             'parameter_rename_plan',
             'class_move_plan',
             'method_move_plan',
+            'method_copy_plan',
             'method_removal_plan',
             'property_removal_plan',
             'class_constant_removal_plan',
@@ -40,13 +41,13 @@ final class CapabilitiesTest extends TestCase
             'type' => 'plan_capabilities',
             'capabilities' => [
                 ['plan_type' => 'method_move_plan', 'contract_version' => '1.0'],
-                ['plan_type' => 'method_copy_plan', 'contract_version' => '1.0'],
+                ['plan_type' => 'class_scaffold_plan', 'contract_version' => '1.0'],
                 ['plan_type' => 'class_move_plan', 'contract_version' => '2.0'],
             ],
         ]);
 
         self::assertSame(['method_move_plan'], array_map(static fn (array $row): string => $row['map']['plan_type'], $result['executable']));
-        self::assertSame(['method_copy_plan', 'class_move_plan'], array_map(static fn (array $row): string => $row['plan_type'], $result['planned_not_executable']));
+        self::assertSame(['class_scaffold_plan', 'class_move_plan'], array_map(static fn (array $row): string => $row['plan_type'], $result['planned_not_executable']));
         self::assertContains('method_removal_plan', $result['executable_not_planned']);
         self::assertNotContains('method_move_plan', $result['executable_not_planned']);
     }
@@ -75,7 +76,7 @@ final class CapabilitiesTest extends TestCase
         $this->expectException(InvalidArgumentException::class);
 
         (new EditEngine())->preflight(
-            ['type' => 'method_copy_plan'],
+            ['type' => 'class_scaffold_plan'],
             new AgentMapIndex('1', sys_get_temp_dir(), 'x', [], [], [], new AnalysisFingerprint('', '', '', '')),
             sys_get_temp_dir(),
         );
@@ -120,11 +121,11 @@ final class CapabilitiesTest extends TestCase
         $result = (new CapabilityRegistry())->intersect($payload);
 
         self::assertSame([], $result['executable_not_planned'], 'agent-edit executes a contract the installed agent-map no longer plans.');
-        self::assertCount(12, $result['executable']);
+        self::assertCount(13, $result['executable']);
         $plannedOnly = array_map(static fn (array $row): string => $row['plan_type'], $result['planned_not_executable']);
         foreach ($plannedOnly as $type) {
             // Anything Map plans but agent-edit cannot execute must be a known non-mutation-contract gap, never silent.
-            self::assertContains($type, ['method_copy_plan', 'class_scaffold_plan', 'method_scaffold_plan']);
+            self::assertContains($type, ['class_scaffold_plan', 'method_scaffold_plan']);
         }
     }
 

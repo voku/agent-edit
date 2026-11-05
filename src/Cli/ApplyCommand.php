@@ -199,7 +199,7 @@ Usage:
 
 Consumes one safe versioned agent-map plan through agent-edit's deterministic mutation boundary.
 The fixed allowlist covers the six rename-plan contracts, class_move_plan@1.0,
-method_move_plan@1.0, method_removal_plan@1.0, property_removal_plan@1.0,
+method_move_plan@1.0, method_copy_plan@1.0, method_removal_plan@1.0, property_removal_plan@1.0,
 and class_constant_removal_plan@1.0.
 Each owner family keeps its own wire decoder and semantic invariants; arbitrary edit plans and Rector
 execution remain rejected.

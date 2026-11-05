@@ -92,7 +92,7 @@ final readonly class EditMovePlanApplier
 
         /** @var array<string, string> $original */
         $original = [];
-        /** @var array<string, list<array{int, int, string}>> $byFile */
+        /** @var array<string, list<array{int, int, string, string}>> $byFile */
         $byFile = [];
         /** @var array<string, string> $sourceHashes */
         $sourceHashes = [];
@@ -100,14 +100,15 @@ final readonly class EditMovePlanApplier
         foreach ($plan->edits() as $edit) {
             $path = $this->sourcePath($root, $edit->path);
             $content = $original[$path] ??= $this->read($path);
+            $expectedLength = $edit->expected === '' ? 0 : $edit->endFilePos - $edit->startFilePos + 1;
             if (
                 !hash_equals($edit->sourceSha256, 'sha256:' . hash('sha256', $content))
-                || substr($content, $edit->startFilePos, $edit->endFilePos - $edit->startFilePos + 1) !== $edit->expected
+                || substr($content, $edit->startFilePos, $expectedLength) !== $edit->expected
             ) {
                 throw new RuntimeException('Refactor edit evidence changed before apply; rebuild and re-plan.');
             }
             $this->rememberSourceHash($sourceHashes, $path, $edit->sourceSha256);
-            $byFile[$path][] = [$edit->startFilePos, $edit->endFilePos, $edit->replacement];
+            $byFile[$path][] = [$edit->startFilePos, $edit->endFilePos, $edit->replacement, $edit->expected];
         }
 
         /** @var array<string, string> $files */
@@ -116,11 +117,15 @@ final readonly class EditMovePlanApplier
             usort($fileEdits, static fn (array $left, array $right): int => $right[0] <=> $left[0]);
             $content = $original[$path];
             $previousStart = strlen($content);
-            foreach ($fileEdits as [$start, $end, $replacement]) {
-                if ($end >= $previousStart) {
+            foreach ($fileEdits as [$start, $end, $replacement, $expected]) {
+                if ($expected !== '' && $end >= $previousStart) {
                     throw new RuntimeException('Refactor plan contains overlapping edit ranges.');
                 }
-                $content = substr($content, 0, $start) . $replacement . substr($content, $end + 1);
+                if ($expected === '' && $start > $previousStart) {
+                    throw new RuntimeException('Refactor plan contains overlapping edit ranges.');
+                }
+                $replacementEnd = $expected === '' ? $start : $end + 1;
+                $content = substr($content, 0, $start) . $replacement . substr($content, $replacementEnd);
                 $previousStart = $start;
             }
             $files[$path] = $content;

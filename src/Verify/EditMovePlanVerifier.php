@@ -8,6 +8,7 @@ use voku\AgentEdit\Plan\RenamePlanEditEvidence;
 use voku\AgentEdit\Plan\RenamePlanDocument;
 use voku\AgentEdit\Plan\EditMovePlanEvidence;
 use voku\AgentEdit\Plan\ClassMovePlanDocument;
+use voku\AgentEdit\Plan\MethodCopyPlanDocument;
 use voku\AgentEdit\Plan\MethodMovePlanDocument;
 use HelgeSverre\Toon\Toon;
 use JsonException;
@@ -62,6 +63,7 @@ final readonly class EditMovePlanVerifier implements BundleVerifier
         $expectedRunner = match ($document->planType()) {
             'class_move_plan' => 'class-move-plan',
             'method_move_plan' => 'method-move-plan',
+            'method_copy_plan' => 'method-copy-plan',
             default => 'rename-plan',
         };
         if (($execution['runner']['name'] ?? null) !== $expectedRunner) {
@@ -156,7 +158,7 @@ final readonly class EditMovePlanVerifier implements BundleVerifier
             $searchCursor = 0;
             $expectedOccurrences = [];
             foreach ($edits as $edit) {
-                $removedLength = $edit->endFilePos - $edit->startFilePos + 1;
+                $removedLength = $edit->expected === '' ? 0 : $edit->endFilePos - $edit->startFilePos + 1;
                 if ($edit->replacement === '') {
                     // A same-file move re-inserts the removed text in the file; only occurrences the plan itself
                     // does not put back count as "still present".
@@ -217,6 +219,7 @@ final readonly class EditMovePlanVerifier implements BundleVerifier
             'kind' => match ($document->planType()) {
                 'class_move_plan' => 'class_move_plan_verification',
                 'method_move_plan' => 'method_move_plan_verification',
+                'method_copy_plan' => 'method_copy_plan_verification',
                 default => 'rename_plan_verification',
             },
             'status' => $viaManifest ? 'incomplete' : 'passed',
@@ -248,6 +251,7 @@ final readonly class EditMovePlanVerifier implements BundleVerifier
         return match ($plan['type'] ?? null) {
             'class_move_plan' => ClassMovePlanDocument::fromArray($plan),
             'method_move_plan' => MethodMovePlanDocument::fromArray($plan),
+            'method_copy_plan' => MethodCopyPlanDocument::fromArray($plan),
             default => RenamePlanDocument::fromArray($plan),
         };
     }

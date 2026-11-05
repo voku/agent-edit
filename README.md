@@ -36,11 +36,11 @@ vendor/bin/agent-edit capabilities --format=json
 vendor/bin/agent-map plan-capabilities --format=json | vendor/bin/agent-edit capabilities --with-map=-
 ```
 
-The second command intersects what Map can *plan* with what agent-edit can *execute*: `executable`, `planned_not_executable` (for example `method_copy_plan`) and `executable_not_planned`. A host should expose only the intersection to a coding agent.
+The second command intersects what Map can *plan* with what agent-edit can *execute*: `executable`, `planned_not_executable` (for example `class_scaffold_plan`) and `executable_not_planned`. A host should expose only the intersection to a coding agent.
 
 `class_removal_plan` deletes exactly one whole file: the plan must be `safe` (no blockers, blind spots or stale evidence), publish no edits or moves, and name the single owned source file with its hash. Apply re-proves the hash, the target's sole declaration and the absence of incoming Map evidence before the file is moved aside, hash-checked and discarded; verify requires the file and class to be gone from a rebuilt Map.
 
-Executable contracts (all `@1.0`): `method|function|class|property|class_constant|parameter_rename_plan`, `class_move_plan`, `method_move_plan`, `method_removal_plan`, `property_removal_plan`, `class_constant_removal_plan`, `class_removal_plan`.
+Executable contracts (all `@1.0`): `method|function|class|property|class_constant|parameter_rename_plan`, `class_move_plan`, `method_move_plan`, `method_copy_plan`, `method_removal_plan`, `property_removal_plan`, `class_constant_removal_plan`, `class_removal_plan`.
 
 ## Package API
 
