@@ -1,0 +1,67 @@
+name: Real refactoring dogfood
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: real-refactoring-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  end-to-end:
+    name: real rename/move cases (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.3', '8.4', '8.5']
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          tools: composer:v2
+      - run: composer install --no-interaction --prefer-dist
+      - name: Check runner and dependency evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          php -l tools/map-edit-dogfood.php
+          test ! -d vendor/voku/agent-loop
+          php -r 'require "vendor/autoload.php"; $v = \Composer\InstalledVersions::getPrettyVersion("voku/agent-map"); if ($v === null || version_compare(ltrim($v, "v"), "0.22.6", "<")) { fwrite(STDERR, "Expected agent-map >=0.22.6; installed: " . ($v ?? "missing") . "\n"); exit(1); }'
+      - name: Run real refactoring and safety scenarios
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="refactoring-proof-php${{ matrix.php }}.log"
+          {
+            printf 'commit=%s\n' "$GITHUB_SHA"
+            printf 'PHP=%s\n' "$(php -r 'echo PHP_VERSION;')"
+            composer show voku/agent-map --no-ansi | grep -E '^(name|versions) +:'
+          } > "$report"
+          php tools/map-edit-dogfood.php \
+            method-rename-real-callers \
+            method-move-real-docblock \
+            class-move-multiple-consumers \
+            rename-stale-caller \
+            method-move-owner-dependent \
+            class-move-target-collision \
+            2>&1 | tee -a "$report"
+          test "$(grep -c '^ok   ' "$report")" -eq 6
+      - name: Upload exact-head run evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: real-refactoring-php${{ matrix.php }}
+          path: refactoring-proof-php${{ matrix.php }}.log
+          if-no-files-found: warn
+          retention-days: 14
