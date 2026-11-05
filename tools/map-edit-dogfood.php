@@ -184,6 +184,258 @@ $scenarios = [
             }
         },
     ),
+    // Realistic multi-file rename: every statically resolved caller must follow the declaration.
+    'method-rename-real-callers' => static fn () => $happy(
+        'method-rename-real-callers',
+        [
+            'src/BillingService.php' => php(<<<'PHP'
+final class BillingService
+{
+    /** Calculate tax in whole currency units. */
+    public function calculateTax(int $amount): int
+    {
+        return intdiv($amount * 19, 100);
+    }
+
+    public function status(): string
+    {
+        return 'active';
+    }
+}
+PHP),
+            'src/Checkout.php' => php(<<<'PHP'
+final class Checkout
+{
+    public function taxOn(int $amount): int
+    {
+        return (new BillingService())->calculateTax($amount);
+    }
+}
+PHP),
+            'src/Invoice.php' => php(<<<'PHP'
+final class Invoice
+{
+    public function taxOn(int $amount): int
+    {
+        $service = new BillingService();
+
+        return $service->calculateTax($amount);
+    }
+}
+PHP),
+        ],
+        "rename-plan 'Demo\\BillingService::calculateTax' computeTax",
+        'method_rename_plan',
+        static function (string $dir): void {
+            foreach (['src/BillingService.php', 'src/Checkout.php', 'src/Invoice.php'] as $path) {
+                assertContains($dir, $path, 'computeTax');
+                if (str_contains((string) file_get_contents($dir . '/' . $path), 'calculateTax')) {
+                    fwrite(STDERR, "method-rename-real-callers: old method name remains in {$path}.\n");
+                    exit(1);
+                }
+            }
+            assertContains($dir, 'src/BillingService.php', 'function status(): string');
+            assertContains($dir, 'src/BillingService.php', 'Calculate tax in whole currency units.');
+            $run = <<<'PHP'
+require 'src/BillingService.php';
+require 'src/Checkout.php';
+require 'src/Invoice.php';
+echo (new \Demo\Checkout())->taxOn(100) + (new \Demo\Invoice())->taxOn(200);
+PHP;
+            if (must($dir, 'php -r ' . escapeshellarg($run)) !== '57') {
+                fwrite(STDERR, "method-rename-real-callers: runtime behavior changed.\n");
+                exit(1);
+            }
+        },
+    ),
+    // Relocate a pure, unused helper; keep neighboring methods and documentation unchanged.
+    'method-move-real-docblock' => static fn () => $happy(
+        'method-move-real-docblock',
+        [
+            'src/LegacyFormatter.php' => php(<<<'PHP'
+final class LegacyFormatter
+{
+    /** Normalize a code without changing caller-visible state. */
+    public static function normalizeCode(string $code): string
+    {
+        return strtoupper(trim($code));
+    }
+
+    public function keep(): string
+    {
+        return 'legacy';
+    }
+}
+PHP),
+            'src/CodeFormatter.php' => php(<<<'PHP'
+final class CodeFormatter
+{
+    public function label(): string
+    {
+        return 'codes';
+    }
+}
+PHP),
+        ],
+        "method-move-plan 'Demo\\LegacyFormatter::normalizeCode' 'Demo\\CodeFormatter'",
+        'method_move_plan',
+        static function (string $dir): void {
+            assertContains($dir, 'src/LegacyFormatter.php', 'function keep(): string');
+            assertContains($dir, 'src/CodeFormatter.php', 'function label(): string');
+            assertContains($dir, 'src/CodeFormatter.php', 'Normalize a code without changing caller-visible state.');
+            assertContains($dir, 'src/CodeFormatter.php', 'function normalizeCode(string $code): string');
+            if (str_contains((string) file_get_contents($dir . '/src/LegacyFormatter.php'), 'function normalizeCode')) {
+                fwrite(STDERR, "method-move-real-docblock: original declaration was not removed.\n");
+                exit(1);
+            }
+            $run = <<<'PHP'
+require 'src/LegacyFormatter.php';
+require 'src/CodeFormatter.php';
+echo \Demo\CodeFormatter::normalizeCode(' ab-12 ')
+    . ':' . (new \Demo\LegacyFormatter())->keep()
+    . ':' . (new \Demo\CodeFormatter())->label();
+PHP;
+            if (must($dir, 'php -r ' . escapeshellarg($run)) !== 'AB-12:legacy:codes') {
+                fwrite(STDERR, "method-move-real-docblock: moved method behaves differently.\n");
+                exit(1);
+            }
+        },
+    ),
+    // PSR-4 relocation must update two independent consumers, not merely move one declaration.
+    'class-move-multiple-consumers' => static fn () => $happy(
+        'class-move-multiple-consumers',
+        [
+            'composer.json' => $composer,
+            'src/Legacy/TaxRate.php' => php(<<<'PHP'
+/** Tax calculation shared by checkout and invoicing. */
+final class TaxRate
+{
+    public static function apply(int $amount): int
+    {
+        return $amount * 2;
+    }
+}
+PHP, 'App\\Legacy'),
+            'src/Client/Checkout.php' => php(<<<'PHP'
+use App\Legacy\TaxRate;
+
+final class Checkout
+{
+    public function total(): int
+    {
+        return TaxRate::apply(10);
+    }
+}
+PHP, 'App\\Client'),
+            'src/Client/Invoice.php' => php(<<<'PHP'
+use App\Legacy\TaxRate;
+
+final class Invoice
+{
+    public function total(): int
+    {
+        return TaxRate::apply(15);
+    }
+}
+PHP, 'App\\Client'),
+        ],
+        "class-move-plan 'App\\Legacy\\TaxRate' 'App\\Modern\\TaxRate'",
+        'class_move_plan',
+        static function (string $dir): void {
+            if (is_file($dir . '/src/Legacy/TaxRate.php') || !is_file($dir . '/src/Modern/TaxRate.php')) {
+                fwrite(STDERR, "class-move-multiple-consumers: PSR-4 file move missing.\n");
+                exit(1);
+            }
+            assertContains($dir, 'src/Modern/TaxRate.php', 'namespace App\\Modern;');
+            assertContains($dir, 'src/Modern/TaxRate.php', 'Tax calculation shared by checkout and invoicing.');
+            foreach (['src/Client/Checkout.php', 'src/Client/Invoice.php'] as $path) {
+                assertContains($dir, $path, 'use App\\Modern\\TaxRate;');
+                if (str_contains((string) file_get_contents($dir . '/' . $path), 'App\\Legacy\\TaxRate')) {
+                    fwrite(STDERR, "class-move-multiple-consumers: stale consumer import {$path}.\n");
+                    exit(1);
+                }
+            }
+            $run = <<<'PHP'
+require 'src/Modern/TaxRate.php';
+require 'src/Client/Checkout.php';
+require 'src/Client/Invoice.php';
+echo (new \App\Client\Checkout())->total() + (new \App\Client\Invoice())->total();
+PHP;
+            if (must($dir, 'php -r ' . escapeshellarg($run)) !== '50') {
+                fwrite(STDERR, "class-move-multiple-consumers: runtime behavior changed.\n");
+                exit(1);
+            }
+        },
+    ),
+    // A caller changing after planning invalidates the whole multi-file rename, without partial edits.
+    'rename-stale-caller' => static function () use ($build, $map, $edit): void {
+        $dir = fixture([
+            'src/Service.php' => php("final class Service\n{\n    public function legacy(): int\n    {\n        return 7;\n    }\n}"),
+            'src/Caller.php' => php("final class Caller\n{\n    public function run(Service \$service): int\n    {\n        return \$service->legacy();\n    }\n}"),
+        ]);
+        $build($dir);
+        must($dir, $map . " rename-plan 'Demo\\Service::legacy' modern --index .agent-map/php-symbols.json --format json > plan.json");
+        $plan = json_decode((string) file_get_contents($dir . '/plan.json'), true, 512, JSON_THROW_ON_ERROR);
+        if (($plan['status'] ?? null) !== 'safe') {
+            fwrite(STDERR, "rename-stale-caller: baseline plan is not safe.\n");
+            exit(1);
+        }
+        file_put_contents($dir . '/src/Caller.php', (string) file_get_contents($dir . '/src/Caller.php') . "// edited since planning\n");
+        $before = snapshot($dir);
+        expectFailure($dir, $edit . ' apply plan.json --task STALE_CALLER', 'stale');
+        if (snapshot($dir) !== $before) {
+            fwrite(STDERR, "rename-stale-caller: an outdated plan changed source files.\n");
+            exit(1);
+        }
+        assertContains($dir, 'src/Service.php', 'function legacy()');
+        assertContains($dir, 'src/Caller.php', '->legacy()');
+        echo "ok   rename-stale-caller (changed caller, no partial rename)\n";
+    },
+    // Moving a method that uses its owner's private state must be blocked, not change its meaning.
+    'method-move-owner-dependent' => static function () use ($build, $map, $edit): void {
+        $dir = fixture([
+            'src/Owner.php' => php("final class Owner\n{\n    private string \$prefix = 'old:';\n\n    public function render(string \$suffix): string\n    {\n        return \$this->prefix . \$suffix;\n    }\n}"),
+            'src/Other.php' => php("final class Other\n{\n}"),
+        ]);
+        $build($dir);
+        must($dir, $map . " method-move-plan 'Demo\\Owner::render' 'Demo\\Other' --index .agent-map/php-symbols.json --format json > plan.json");
+        $plan = json_decode((string) file_get_contents($dir . '/plan.json'), true, 512, JSON_THROW_ON_ERROR);
+        if (($plan['status'] ?? null) !== 'blocked' || ($plan['blockers'] ?? []) === []) {
+            fwrite(STDERR, "method-move-owner-dependent: unsafe owner dependency was not blocked.\n");
+            exit(1);
+        }
+        $before = snapshot($dir);
+        [$code, $out] = sh($dir, $edit . ' apply plan.json --dry-run --task OWNER_DEP');
+        if ($code === 0 || snapshot($dir) !== $before) {
+            fwrite(STDERR, "method-move-owner-dependent: unsafe plan passed or changed source: {$out}\n");
+            exit(1);
+        }
+        echo "ok   method-move-owner-dependent (owner state, fail-closed)\n";
+    },
+    // A destination class already present at the PSR-4 path must not be overwritten by a class move.
+    'class-move-target-collision' => static function () use ($build, $map, $edit, $composer): void {
+        $dir = fixture([
+            'composer.json' => $composer,
+            'src/Legacy/Service.php' => php("final class Service\n{\n}", 'App\\Legacy'),
+            'src/Modern/Service.php' => php("final class Service\n{\n}", 'App\\Modern'),
+        ]);
+        $build($dir);
+        must($dir, $map . " class-move-plan 'App\\Legacy\\Service' 'App\\Modern\\Service' --index .agent-map/php-symbols.json --format json > plan.json");
+        $plan = json_decode((string) file_get_contents($dir . '/plan.json'), true, 512, JSON_THROW_ON_ERROR);
+        if (($plan['status'] ?? null) !== 'blocked' || ($plan['blockers'] ?? []) === []) {
+            fwrite(STDERR, "class-move-target-collision: existing destination was not blocked.\n");
+            exit(1);
+        }
+        $before = snapshot($dir);
+        [$code, $out] = sh($dir, $edit . ' apply plan.json --dry-run --task COLLISION');
+        if ($code === 0 || snapshot($dir) !== $before) {
+            fwrite(STDERR, "class-move-target-collision: destructive plan passed or changed files: {$out}\n");
+            exit(1);
+        }
+        assertContains($dir, 'src/Legacy/Service.php', 'namespace App\\Legacy;');
+        assertContains($dir, 'src/Modern/Service.php', 'namespace App\\Modern;');
+        echo "ok   class-move-target-collision (destination protected)\n";
+    ),
     'method-copy' => static fn () => $happy(
         'method-copy',
         ['src/Source.php' => php("final class Source\n{\n    public static function normalize(string \$value): string\n    {\n        return trim(\$value);\n    }\n}"), 'src/Destination.php' => php("final class Destination\n{\n}")],
