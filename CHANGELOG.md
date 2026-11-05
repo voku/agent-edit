@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## 0.6.2 - 2026-11-05
 
+### Fixed
+
+- Align method-insertion hardening tests with the current released agent-map planner: CRLF edit replacements are already normalized (never convert them a second time), and aliased-import safety may now be rejected by the planner before reaching agent-edit. Preserve consumer-side refusal assertions for older still-supported map versions.
+
 ### Tests
 
 - Extend the PHP CI matrix to PHP 8.5 alongside 8.3 and 8.4.
