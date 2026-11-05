@@ -435,7 +435,7 @@ PHP;
         assertContains($dir, 'src/Legacy/Service.php', 'namespace App\\Legacy;');
         assertContains($dir, 'src/Modern/Service.php', 'namespace App\\Modern;');
         echo "ok   class-move-target-collision (destination protected)\n";
-    ),
+    },
     'method-copy' => static fn () => $happy(
         'method-copy',
         ['src/Source.php' => php("final class Source\n{\n    public static function normalize(string \$value): string\n    {\n        return trim(\$value);\n    }\n}"), 'src/Destination.php' => php("final class Destination\n{\n}")],
