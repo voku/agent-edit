@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        php: ['8.3', '8.4']
+        php: ['8.3', '8.4', '8.5']
     steps:
       - uses: actions/checkout@v6
         with:
@@ -42,6 +42,9 @@ jobs:
           coverage: none
           tools: composer:v2
       - run: composer install --no-interaction --prefer-dist
+      - name: Prove installed agent-map includes the 0.22.6 type-import fix
+        run: |
+          php -r 'require "vendor/autoload.php"; $v = \Composer\InstalledVersions::getPrettyVersion("voku/agent-map"); if ($v === null || version_compare(ltrim($v, "v"), "0.22.6", "<")) { fwrite(STDERR, "Expected installed agent-map >=0.22.6, got " . ($v ?? "unknown") . "\n"); exit(1); } echo "agent-map " . $v . "\n";'
       - name: Prove agent-loop is not installed (not even transitively)
         run: |
           test ! -d vendor/voku/agent-loop
