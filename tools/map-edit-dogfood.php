@@ -256,7 +256,7 @@ PHP;
 final class LegacyFormatter
 {
     /** Normalize a code without changing caller-visible state. */
-    public static function normalizeCode(string $code): string
+    private static function normalizeCode(string $code): string
     {
         return strtoupper(trim($code));
     }
@@ -291,7 +291,8 @@ PHP),
             $run = <<<'PHP'
 require 'src/LegacyFormatter.php';
 require 'src/CodeFormatter.php';
-echo \Demo\CodeFormatter::normalizeCode(' ab-12 ')
+$method = new \ReflectionMethod(\Demo\CodeFormatter::class, 'normalizeCode');
+echo $method->invoke(null, ' ab-12 ')
     . ':' . (new \Demo\LegacyFormatter())->keep()
     . ':' . (new \Demo\CodeFormatter())->label();
 PHP;
@@ -394,7 +395,7 @@ PHP;
     // Moving a method that uses its owner's private state must be blocked, not change its meaning.
     'method-move-owner-dependent' => static function () use ($build, $map, $edit): void {
         $dir = fixture([
-            'src/Owner.php' => php("final class Owner\n{\n    private string \$prefix = 'old:';\n\n    public function render(string \$suffix): string\n    {\n        return \$this->prefix . \$suffix;\n    }\n}"),
+            'src/Owner.php' => php("final class Owner\n{\n    private static string \$prefix = 'old:';\n\n    private static function render(string \$suffix): string\n    {\n        return self::\$prefix . \$suffix;\n    }\n}"),
             'src/Other.php' => php("final class Other\n{\n}"),
         ]);
         $build($dir);
