@@ -66,7 +66,7 @@ function fixture(array $files): string
         file_put_contents($dir . '/' . $path, $content);
     }
     // Verification needs Git-observed changed_files evidence, so every fixture is a real repository.
-    must($dir, 'git init -q . && printf ".agent-map/\n.agent-edit/\nplan.json\n" > .gitignore && git add -A && git -c user.email=dogfood@example.invalid -c user.name=dogfood commit -qm init');
+    must($dir, 'git init -q . && printf ".agent-map/\n.agent-edit/\nplan.json\nplan.err\n" > .gitignore && git add -A && git -c user.email=dogfood@example.invalid -c user.name=dogfood commit -qm init');
 
     return $dir;
 }
@@ -375,7 +375,11 @@ PHP;
             'src/Caller.php' => php("final class Caller\n{\n    public function run(Service \$service): int\n    {\n        return \$service->legacy();\n    }\n}"),
         ]);
         $build($dir);
-        must($dir, $map . " rename-plan 'Demo\\Service::legacy' modern --index .agent-map/php-symbols.json --format json > plan.json");
+        [$planExit] = sh($dir, "(" . $map . " rename-plan 'Demo\\Service::legacy' modern --index .agent-map/php-symbols.json --format json > plan.json 2> plan.err)");
+        if ($planExit !== 0) {
+            fwrite(STDERR, "rename-stale-caller: baseline plan generation failed: " . (string) file_get_contents($dir . '/plan.err') . "\n");
+            exit(1);
+        }
         $plan = json_decode((string) file_get_contents($dir . '/plan.json'), true, 512, JSON_THROW_ON_ERROR);
         if (($plan['status'] ?? null) !== 'safe') {
             fwrite(STDERR, "rename-stale-caller: baseline plan is not safe.\n");
@@ -399,7 +403,8 @@ PHP;
             'src/Other.php' => php("final class Other\n{\n}"),
         ]);
         $build($dir);
-        [$planExit, $planOut] = sh($dir, $map . " method-move-plan 'Demo\\Owner::render' 'Demo\\Other' --index .agent-map/php-symbols.json --format json > plan.json");
+        [$planExit] = sh($dir, "(" . $map . " method-move-plan 'Demo\\Owner::render' 'Demo\\Other' --index .agent-map/php-symbols.json --format json > plan.json 2> plan.err)");
+        $planOut = is_file($dir . '/plan.err') ? (string) file_get_contents($dir . '/plan.err') : '';
         if ($planExit === 0 || !is_file($dir . '/plan.json') || filesize($dir . '/plan.json') === 0) {
             fwrite(STDERR, "method-move-owner-dependent: blocked planner must return a nonzero status and JSON evidence: {$planOut}\n");
             exit(1);
@@ -425,7 +430,8 @@ PHP;
             'src/Modern/Service.php' => php("final class Service\n{\n}", 'App\\Modern'),
         ]);
         $build($dir);
-        [$planExit, $planOut] = sh($dir, $map . " class-move-plan 'App\\Legacy\\Service' 'App\\Modern\\Service' --index .agent-map/php-symbols.json --format json > plan.json");
+        [$planExit] = sh($dir, "(" . $map . " class-move-plan 'App\\Legacy\\Service' 'App\\Modern\\Service' --index .agent-map/php-symbols.json --format json > plan.json 2> plan.err)");
+        $planOut = is_file($dir . '/plan.err') ? (string) file_get_contents($dir . '/plan.err') : '';
         if ($planExit === 0 || !is_file($dir . '/plan.json') || filesize($dir . '/plan.json') === 0) {
             fwrite(STDERR, "class-move-target-collision: blocked planner must return a nonzero status and JSON evidence: {$planOut}\n");
             exit(1);
