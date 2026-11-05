@@ -55,7 +55,7 @@ jobs:
             rename-stale-caller \
             method-move-owner-dependent \
             class-move-target-collision \
-            | tee -a "$report"
+            2>&1 | tee -a "$report"
           test "$(grep -c '^ok   ' "$report")" -eq 6
       - name: Upload exact-head run evidence
         if: always()
