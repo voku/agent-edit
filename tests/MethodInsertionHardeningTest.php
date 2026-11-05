@@ -195,9 +195,14 @@ PHP);
     {
         $this->write('src/Dest.php', str_replace("\n", "\r\n", self::DEST));
         $plan = $this->copyPlan('Demo\\Src::needsImport');
-        // What an agent-map that follows the destination's line ending plans.
-        foreach ($plan['edits'] as $index => $edit) {
-            $plan['edits'][$index]['replacement'] = str_replace("\n", "\r\n", $edit['replacement']);
+        // Current agent-map already emits CRLF for a CRLF destination; converting again would produce CRCRLF.
+        foreach ($plan['edits'] as $edit) {
+            self::assertStringNotContainsString("\r\r\n", $edit['replacement']);
+            self::assertSame(
+                substr_count($edit['replacement'], "\n"),
+                substr_count($edit['replacement'], "\r\n"),
+                'Planner replacement must follow destination CRLF.',
+            );
         }
 
         $this->apply($plan, label: 'CRLF');
@@ -212,9 +217,6 @@ PHP);
     {
         $this->write('src/Dest.php', str_replace("\n", "\r\n", self::DEST));
         $plan = $this->copyPlan('Demo\\Src::needsImport');
-        foreach ($plan['edits'] as $index => $edit) {
-            $plan['edits'][$index]['replacement'] = str_replace("\n", "\r\n", $edit['replacement']);
-        }
 
         foreach (["\r\r\n", "\r\n\r\n", "\n\r\n"] as $suffix) {
             $forged = $plan;
@@ -306,8 +308,16 @@ PHP);
     public function testACopyPlanThatNamesAnAliasedImportIsRefusedBecauseTheAliasWouldBeLost(): void
     {
         $plan = $this->copyPlan('Demo\\Src::aliased');
-        self::assertSame('safe', $plan['status'], 'agent-map itself still reports this plan as safe');
+        if ($plan['status'] === 'blocked') {
+            // Newer map versions refuse the unsafe alias before agent-edit receives an executable plan.
+            self::assertNotEmpty($plan['blockers']);
+            $this->assertRefused($plan, 'not safe', FailureCode::PlanRefused);
 
+            return;
+        }
+        self::assertSame('safe', $plan['status'], 'unexpected planner status');
+
+        // Older supported map versions may still emit a safe plan; the consumer must refuse it.
         try {
             $this->apply($plan, dryRun: true, label: 'ALIAS');
             self::fail('Expected the aliased import to be refused.');
