@@ -14,6 +14,20 @@ It consumes one already-produced, versioned `agent-map` plan, revalidates every 
 
 It is **not** an LLM editor, not a workflow engine and not a refactoring recommender. It never calls a model: a quick local fix is authored by the caller as a `source_edit_plan` (see [Direct edits](#direct-edits-quick-fixes-without-a-map)) and proven against the current source like any other plan.
 
+## Where to work in this repository
+
+`agent-edit` applies caller-provided or Map-produced plans, not model-invented refactorings. The implementation responsibilities are separated here:
+
+| Concern | Source of truth |
+| --- | --- |
+| Plan parsing and validation | [`src/Plan/`](src/Plan/) and [`src/Capability/`](src/Capability/) |
+| Staging and transactional publication | [`src/Apply/`](src/Apply/) and [`src/EditEngine.php`](src/EditEngine.php) |
+| What a dry run shows | [`src/Preview/`](src/Preview/) and [`src/Cli/`](src/Cli/) |
+| Receipts and deterministic verification | [`src/Receipt/`](src/Receipt/) and [`src/Verify/`](src/Verify/) |
+| Executable regression coverage | [`tests/`](tests/) and [`composer.json`](composer.json) |
+
+The apply/verify result is not a Contract approval and does not create a Git commit, push or PR.
+
 ## Use
 
 ```bash
