@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.6.2 - 2026-11-05
+
+### Fixed
+
+- Align method-insertion hardening tests with the current released agent-map planner: CRLF edit replacements are already normalized (never convert them a second time), and aliased-import safety may now be rejected by the planner before reaching agent-edit. Preserve consumer-side refusal assertions for older still-supported map versions.
+
+### Tests
+
+- Extend the PHP CI matrix to PHP 8.5 alongside 8.3 and 8.4.
+- Prove compatibility against an installed released `voku/agent-map >=0.22.6` in the independent map+edit dogfood job, including a real method-copy plan with nullable native types and generic PHPDoc annotations. Apply and verify the resulting edit, while rejecting invalid generated imports.
+
+### Compatibility
+
+- Preserve the existing `voku/agent-map` Composer compatibility range and the current execution semantics; this patch release strengthens coverage of the latest supported map planner rather than reintroducing the obsolete method-copy implementation from #56.
+
 ## 0.6.1 - 2026-10-24
 
 ### Security
