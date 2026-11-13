@@ -88,7 +88,12 @@ final class CapabilitiesTest extends TestCase
         self::assertSame('agent-map rename-plan', $decoded['plans'][0]['agent_map_command']);
         self::assertSame('agent-map function-rename-plan', $decoded['plans'][1]['agent_map_command']);
         self::assertSame('must_match_installed_map', $decoded['plans'][0]['resolution']);
-        self::assertStringContainsString('normal coding and review workflow', implode(' ', $decoded['instructions']));
+        self::assertCount(6, $decoded['instructions']);
+        $guidance = implode(' ', $decoded['instructions']);
+        self::assertLessThan(1800, strlen($guidance), 'Keep generated instructions focused on agent-edit-specific contracts.');
+        self::assertStringContainsString('plan_type and contract_version', $guidance);
+        self::assertStringContainsString('Neither plan grants mutation approval', $guidance);
+        self::assertStringContainsString('normal coding and review workflow', $guidance);
     }
 
     public function testInstructionsWithMapExposeOnlyExactExecutableIntersection(): void
