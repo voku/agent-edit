@@ -187,6 +187,17 @@ PHP;
         self::assertSame([], $guard->changes("<?php\nfinal class {\n", self::BASE));
     }
 
+    public function testCompareSeparatesUnchangedChangedAndUnknown(): void
+    {
+        $guard = new SignatureGuard();
+
+        self::assertSame('unchanged', $guard->compare(self::BASE, self::BASE)->status);
+        self::assertSame('unknown', $guard->compare("<?php\nfinal class {\n", self::BASE)->status);
+        self::assertSame('the original source does not parse', $guard->compare("<?php\nfinal class {\n", self::BASE)->reason);
+        self::assertSame('the edited source does not parse', $guard->compare(self::BASE, "<?php\nfinal class {\n")->reason);
+        self::assertSame([], $guard->compare("<?php\nfinal class {\n", self::BASE)->changes);
+    }
+
     public function testInterfaceAndEnumDeclarationsAreTracked(): void
     {
         $source = <<<'PHP'

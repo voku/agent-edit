@@ -9,6 +9,8 @@ use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use RuntimeException;
 use voku\AgentEdit\Apply\SourceEditPlanApplier;
+use voku\AgentEdit\Failure\EditFailure;
+use voku\AgentEdit\Failure\FailureCode;
 
 final class SourceEditPlanApplierTest extends TestCase
 {
@@ -498,6 +500,39 @@ PHP;
         self::assertStringContainsString('int $factor = 2', $this->read('src/Service.php'));
         self::assertCount(1, $result->evidence['acknowledged_api_changes']);
         self::assertStringContainsString('src/Service.php: method `Demo\Service::double` signature changed', $result->evidence['acknowledged_api_changes'][0]);
+    }
+
+    public function testRepairingUnparsableSourceCannotHideARemovedPublicMethod(): void
+    {
+        $broken = str_replace('return $a - $b;', 'return $a - $b', self::SERVICE);
+        file_put_contents($this->root . '/src/Service.php', $broken);
+        $edits = [
+            ['path' => 'src/Service.php', 'find' => 'return $a - $b', 'replace' => 'return $a - $b;'],
+            ['path' => 'src/Service.php', 'find' => "    public function double(int \$a): int\n    {\n        return \$a * 2;\n    }\n\n", 'replace' => ''],
+        ];
+
+        try {
+            (new SourceEditPlanApplier())->apply($this->plan($edits), $this->root);
+            self::fail('An unknown API verdict must not pass as "no API change".');
+        } catch (EditFailure $exception) {
+            self::assertSame(FailureCode::ApiChangeRefused, $exception->failureCode());
+            self::assertSame('unknown', $exception->details()['api_check']);
+            self::assertStringContainsString('the original source does not parse', $exception->getMessage());
+            self::assertStringContainsString('allow_signature_change', $exception->getMessage());
+        }
+        self::assertSame($broken, $this->read('src/Service.php'));
+    }
+
+    public function testAcknowledgedSyntaxRepairIsAppliedAndRecordsTheUnavailableComparison(): void
+    {
+        file_put_contents($this->root . '/src/Service.php', str_replace('return $a - $b;', 'return $a - $b', self::SERVICE));
+
+        $result = (new SourceEditPlanApplier())->apply($this->plan([
+            ['path' => 'src/Service.php', 'find' => 'return $a - $b', 'replace' => 'return $a - $b;'],
+        ], [], true), $this->root);
+
+        self::assertSame(self::SERVICE, $this->read('src/Service.php'));
+        self::assertSame(['src/Service.php: API comparison unavailable (the original source does not parse)'], $result->evidence['acknowledged_api_changes']);
     }
 
     public function testBodyEditsPrivateMethodChangesAndNewMembersAreNotApiChanges(): void

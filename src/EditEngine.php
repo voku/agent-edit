@@ -120,7 +120,9 @@ final readonly class EditEngine
         // empty one as a missing verification result and block a close that never edited anything.
         $created = $this->createDirectories($request->outputDirectory);
         try {
-            return $this->applyAndPersist($request);
+            // One run per bundle from claim to receipt: without it, a second run could claim the bundle before the
+            // first one wrote its receipt and then overwrite a successful receipt with its own failure.
+            return $this->withBundleLock($request->outputDirectory, fn (): EditReceipt => $this->applyAndPersist($request));
         } catch (ReceiptNotPersistedException $exception) {
             // The edits are already published: the bundle directory is the only trace a host can discover.
             throw $exception;
@@ -559,6 +561,38 @@ final readonly class EditEngine
             ));
         }
         $this->invalidateVerification($bundle);
+    }
+
+    /**
+     * Holds an exclusive lock for one receipt bundle while `$operation` runs. The lock file lives in the system temp
+     * directory (like the mutation lock), so the bundle itself stays free of lock artefacts.
+     *
+     * @template T
+     * @param Closure(): T $operation
+     * @return T
+     */
+    private function withBundleLock(string $bundle, Closure $operation): mixed
+    {
+        $real = realpath($bundle);
+        if (!is_string($real)) {
+            throw new RuntimeException('Unable to resolve receipt bundle: ' . $bundle);
+        }
+        $path = sys_get_temp_dir() . '/agent-edit-bundle-' . hash('sha256', $real) . '.lock';
+        $handle = fopen($path, 'c');
+        if (!is_resource($handle)) {
+            throw new RuntimeException('Unable to open receipt bundle lock: ' . $path);
+        }
+        if (!flock($handle, LOCK_EX)) {
+            fclose($handle);
+            throw new RuntimeException('Unable to acquire receipt bundle lock: ' . $path);
+        }
+
+        try {
+            return $operation();
+        } finally {
+            flock($handle, LOCK_UN);
+            fclose($handle);
+        }
     }
 
     /** A verification result describes one applied state; once that state is gone it must not stay readable. */

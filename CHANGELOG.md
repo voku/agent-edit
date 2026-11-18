@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Fixed
+
+- A direct edit of a PHP file whose original source does not parse is no longer treated as "no API change". `SignatureGuard::compare()` returns a three-state `SignatureComparison` (`unchanged`, `changed`, `unknown`); an `unknown` verdict is refused with `api_change_refused` (`details.api_check = "unknown"`) unless the plan sets `allow_signature_change`, and an acknowledged one is recorded in `acknowledged_api_changes`. Previously a syntax repair could also remove or change a public method without acknowledgement. `SignatureGuard::changes()` keeps its old behaviour.
+- Two runs that apply into the same receipt bundle are serialized from bundle claim to receipt write by a per-bundle lock. Previously a second run could claim the bundle while the first was still being authorized, apply the edit and record success, after which the first run failed on the changed source and overwrote that successful receipt with a failure. The second run now waits and is refused because the bundle already records an applied plan. Covered by a real two-process test.
+
 ## 0.6.2 - 2026-11-05
 
 ### Fixed
