@@ -4,7 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## 0.8.1 - 2026-11-19
+
+### Fixed
+
+- An interface or overridden method rename planned by agent-map can be applied. `method_rename_plan` edits are bound to members of the plan's `family` (the declaration, every implementation and override, and calls typed by any of them), but the decoder accepted family-bound edits only for parameter renames, so every safe family plan was refused with "not bound to the declared target identity". The family must contain the target, and every member must share the target's method name; edits bound outside it are still refused. A plan without `family` keeps the single-target check.
 
 ### Development
 

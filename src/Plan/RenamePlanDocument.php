@@ -81,20 +81,11 @@ final readonly class RenamePlanDocument implements EditMovePlanEvidence
 
         $allowedEditSymbols = [$targetId => true];
         if ($type === 'parameter_rename_plan') {
-            $family = $data['family'] ?? null;
-            if (!is_array($family) || $family === []) {
-                throw new RuntimeException('Parameter rename plan requires non-empty method-family evidence.');
-            }
-            $allowedEditSymbols = [];
-            foreach ($family as $member) {
-                if (!is_string($member) || !str_starts_with($member, 'method:')) {
-                    throw new RuntimeException('Parameter rename plan contains invalid method-family evidence.');
-                }
-                $allowedEditSymbols[$member] = true;
-            }
-            if (!isset($allowedEditSymbols[$targetId])) {
-                throw new RuntimeException('Parameter rename target is not part of its declared method family.');
-            }
+            $allowedEditSymbols = self::methodFamily($data['family'] ?? null, $targetId, 'Parameter', false);
+        } elseif ($type === 'method_rename_plan' && array_key_exists('family', $data)) {
+            // An interface or overridden method is renamed together with every implementation and override, so its
+            // edits are bound to family members. The family must contain the target and share its method name.
+            $allowedEditSymbols = self::methodFamily($data['family'], $targetId, 'Method', true);
         }
 
         $rawProvenance = $data['provenance'] ?? null;
@@ -184,6 +175,37 @@ final readonly class RenamePlanDocument implements EditMovePlanEvidence
     public function assertMatches(AgentMapIndex $map): void
     {
         $this->provenance->assertMatches($map, $this->requiresPhpStan());
+    }
+
+    /** @return array<string, true> */
+    private static function methodFamily(mixed $family, string $targetId, string $label, bool $sameName): array
+    {
+        if (!is_array($family) || $family === []) {
+            throw new RuntimeException($label . ' rename plan requires non-empty method-family evidence.');
+        }
+        $targetName = self::methodName($targetId);
+        $allowed = [];
+        foreach ($family as $member) {
+            if (!is_string($member) || !str_starts_with($member, 'method:') || self::methodName($member) === '') {
+                throw new RuntimeException($label . ' rename plan contains invalid method-family evidence.');
+            }
+            if ($sameName && strcasecmp(self::methodName($member), $targetName) !== 0) {
+                throw new RuntimeException($label . ' rename family member does not share the target method name.');
+            }
+            $allowed[$member] = true;
+        }
+        if (!isset($allowed[$targetId])) {
+            throw new RuntimeException($label . ' rename target is not part of its declared method family.');
+        }
+
+        return $allowed;
+    }
+
+    private static function methodName(string $methodId): string
+    {
+        $separator = strrpos($methodId, '::');
+
+        return $separator === false ? '' : substr($methodId, $separator + 2);
     }
 
     /** @param array<string, true> $allowed */
