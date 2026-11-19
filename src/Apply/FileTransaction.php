@@ -86,7 +86,8 @@ final readonly class FileTransaction
                 }
                 $temporary = $this->temporaryPath($operation->path, 'stage');
                 $staged[$operation->path] = $temporary;
-                $permissions = $operation->isCreate() ? ($operation->mode ?? 0o644) : fileperms($operation->path);
+                // An explicit mode (a recovery restore) always wins: the file's current mode may have been widened since.
+                $permissions = $operation->mode ?? ($operation->isCreate() ? 0o644 : fileperms($operation->path));
                 $handle = is_int($permissions) ? $this->createRestricted($temporary, $permissions) : null;
                 if ($handle === null) {
                     throw new RuntimeException('Unable to set staged file permissions: ' . $operation->path);

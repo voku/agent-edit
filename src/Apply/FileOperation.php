@@ -20,7 +20,7 @@ final readonly class FileOperation
     ) {
     }
 
-    /** @param int|null $mode permission bits for a created file (default 0644); an existing file keeps its own */
+    /** @param int|null $mode permission bits for the written file; null keeps an existing file's own mode (0644 for a new file) */
     public static function write(string $path, string $content, ?string $expectedSha256, ?int $mode = null): self
     {
         return new self($path, $content, $expectedSha256, $mode);

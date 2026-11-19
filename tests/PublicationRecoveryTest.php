@@ -376,6 +376,18 @@ final class PublicationRecoveryTest extends TestCase
         self::assertSame(0o600, fileperms($this->project->path('src/Calc.php')) & 0o777, 'restored with its original mode, not 0644');
     }
 
+    public function testARestoreOverAnExistingFileUsesTheRecordedModeNotTheCurrentOne(): void
+    {
+        chmod($this->project->path('src/Calc.php'), 0o600);
+        $this->journal($this->editBoth());
+        $this->project->write('src/Calc.php', self::CALC_PUBLISHED); // published (Show was not): a mix
+        chmod($this->project->path('src/Calc.php'), 0o644); // widened after publication
+
+        self::assertSame('rolled_back', (new EditEngine())->recover($this->project->root, '.agent-edit/receipts/fix')['status']);
+        self::assertSame(self::CALC, $this->project->read('src/Calc.php'));
+        self::assertSame(0o600, fileperms($this->project->path('src/Calc.php')) & 0o777, 'the private original must not come back 0644');
+    }
+
     public function testPrivateEvidenceWritesRestoreTheProcessUmask(): void
     {
         $previous = umask(0o022);
