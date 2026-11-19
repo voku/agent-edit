@@ -37,7 +37,7 @@ jobs:
           set -euo pipefail
           php -l tools/map-edit-dogfood.php
           test ! -d vendor/voku/agent-loop
-          php -r 'require "vendor/autoload.php"; $v = \Composer\InstalledVersions::getPrettyVersion("voku/agent-map"); if ($v === null || version_compare(ltrim($v, "v"), "0.22.6", "<")) { fwrite(STDERR, "Expected agent-map >=0.22.6; installed: " . ($v ?? "missing") . "\n"); exit(1); }'
+          php -r 'require "vendor/autoload.php"; $v = \Composer\InstalledVersions::getPrettyVersion("voku/agent-map"); if ($v === null || version_compare(ltrim($v, "v"), "0.23.0", "<")) { fwrite(STDERR, "Expected agent-map >=0.23.0; installed: " . ($v ?? "missing") . "\n"); exit(1); }'
       - name: Run real refactoring and safety scenarios
         shell: bash
         run: |
