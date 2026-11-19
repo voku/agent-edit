@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Development
+
+- Route experiment Run 1: 12 in-session runs (4 cases × arms A/B/C, one repetition each), results in `docs/route-experiment.md` and `docs/route-experiment.results.jsonl`.
+  - **Correctness:** all 12 correct with no unintended changes, a ceiling effect.
+  - **Arm B:** with the tools installed but unmentioned, no run used them.
+  - **Arm C:** with guidance, the only use was a direct `agent-edit edit` on the local body change, where native editing is cheaper. No run used agent-map. Guidance added about 3% tokens.
+  - **Takeaway:** no evidence yet for routing or more guidance. The next run needs tasks where native editing fails.
+- `prepare.py` gains `--tools-runtime`, which wraps one prepared runtime and logs every agent call to `tool-calls.log` outside the workspace, and `--vendor-shim`, which gives a case a working `vendor/` without Composer. The suite is graded against the baseline's own recorded failures.
+- `prepare.py` now copies git cases with `read-tree`/`checkout-index`. `git archive` dropped export-ignored tests and `phpunit.xml`, so the Recall suite never ran.
+- `prepare.py` computes the case digest before any shim, so the digest matches across arms.
+- Arm C guidance is generated without going through the logging wrapper.
+
 ## 0.8.0 - 2026-11-19
 
 ### Changed
