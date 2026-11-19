@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## 0.6.4 - 2026-11-19
+
 ### Changed
 
 - Accept `voku/agent-map` `^0.20.0 || ^0.21.0 || ^0.22.0 || ^0.23.0`, so installs can resolve agent-map 0.23.0 (adds pluggable template dialects and the experimental Smarty 5 evidence API; no plan contract changes). CI now requires an installed agent-map >=0.23.0, so the suite, PHPStan and the dogfood jobs run against it.
