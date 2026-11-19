@@ -20,7 +20,7 @@ declare(strict_types=1);
  * rows are simulated editors, the ideal one making no mistakes at all. The numbers are lower bounds for the mechanical
  * part of each route, not agent productivity. See README "Route benchmark".
  *
- * Usage: php tools/route-benchmark.php [--json] [--check] [--write]
+ * Usage: php tools/route-benchmark.php [--json] [--check] [--write] [--fixture=DIR]
  *   --check  exit 1 unless every measured metric equals tools/route-benchmark.expected.json and the README table
  *            matches it (CI runs this, so the published numbers cannot drift)
  *   --write  record the measured results as the new snapshot and README table (review the diff before committing)
@@ -30,6 +30,18 @@ $root = dirname(__DIR__);
 $mapBin = $root . '/vendor/bin/agent-map';
 $editBin = $root . '/bin/agent-edit';
 $json = in_array('--json', $argv, true);
+// --fixture=DIR writes the untouched fixture tree, so the real-agent experiment (tools/route-experiment) starts from
+// exactly the files this benchmark measures.
+foreach ($argv as $argument) {
+    if (str_starts_with($argument, '--fixture=')) {
+        $target = substr($argument, strlen('--fixture='));
+        foreach (fixture() as $path => $content) {
+            @mkdir(dirname($target . '/' . $path), 0o775, true);
+            file_put_contents($target . '/' . $path, $content);
+        }
+        exit(0);
+    }
+}
 $check = in_array('--check', $argv, true);
 
 /** @return array{0: int, 1: string} */

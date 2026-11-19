@@ -1,0 +1,50 @@
+{
+  "schema_version": "1.0",
+  "kind": "route_experiment_cases",
+  "note": "Tasks name only the intended change. Oracles live in oracles/ and never enter a workspace.",
+  "agent_edit_version": "0.8.0",
+  "agent_map_version": "0.24.0",
+  "cases": [
+    {
+      "id": "fixture-rename",
+      "kind": "adversarial",
+      "source": {"type": "benchmark_fixture"},
+      "task": "tasks/fixture-rename.md",
+      "oracle": "oracles/fixture.php",
+      "allowed_paths": ["src/Invoice.php", "src/Checkout.php", "src/Report.php"],
+      "expected_route": "map+edit"
+    },
+    {
+      "id": "fixture-remove",
+      "kind": "adversarial",
+      "source": {"type": "benchmark_fixture"},
+      "task": "tasks/fixture-remove.md",
+      "oracle": "oracles/fixture.php",
+      "allowed_paths": ["src/Invoice.php"],
+      "expected_route": "map+edit"
+    },
+    {
+      "id": "fixture-body",
+      "kind": "local_implementation",
+      "source": {"type": "benchmark_fixture"},
+      "task": "tasks/fixture-body.md",
+      "oracle": "oracles/fixture.php",
+      "allowed_paths": ["src/Invoice.php"],
+      "expected_route": "native"
+    },
+    {
+      "id": "recall-rename",
+      "kind": "real_code",
+      "source": {
+        "type": "git",
+        "repository": "https://github.com/voku/agent-recall-compiler",
+        "commit": "ad580ac4abc92e338c7a62debf31929c5fe839ed"
+      },
+      "task": "tasks/recall-rename.md",
+      "oracle": "oracles/recall-rename.php",
+      "allowed_paths": ["src/SelectionResult.php", "src/MetaJsonRenderer.php", "src/OutcomeDraftRenderer.php", "src/SystemBriefingRenderer.php", "src/ValidationPlanRenderer.php", "CHANGELOG.md"],
+      "expected_route": "map+edit",
+      "test_command": "vendor/bin/phpunit"
+    }
+  ]
+}

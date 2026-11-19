@@ -51,5 +51,9 @@ jobs:
           ! composer show 'voku/agent-loop' 2>/dev/null
       - name: Dogfood mutation lifecycle, fail-closed guards and publication rollback
         run: php tools/map-edit-dogfood.php
-      - name: Route benchmark (native vs direct vs map+edit) keeps its published expectations
+      - name: Route benchmark (native vs direct vs map+edit) matches its recorded results
         run: php tools/route-benchmark.php --check
+      - name: Calibrate the real-agent route experiment kit (no model run)
+        run: |
+          git clone -q https://github.com/voku/agent-recall-compiler "$RUNNER_TEMP/recall-source"
+          python3 tools/route-experiment/calibrate.py --work "$RUNNER_TEMP/route-experiment" --recall-source "$RUNNER_TEMP/recall-source"
