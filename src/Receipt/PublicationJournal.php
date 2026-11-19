@@ -48,7 +48,7 @@ final class PublicationJournal
      * bytes and permission bits of every existing file read now. Paths are made relative to `$root`.
      *
      * @param array{files: array<string, string>, final_paths: array<string, string>, source_hashes: array<string, string>} $prepared
-     * @return list<array{path: string, before_sha256: string|null, after_sha256: string|null, mode: int|null, before: string|null}>
+     * @return list<array{path: string, before_sha256: string|null, after_sha256: string|null, mode: int|null, before: string|null, preexisting_temporary_files: list<string>}>
      */
     public static function entriesFromPrepared(array $prepared, string $root): array
     {
@@ -83,7 +83,7 @@ final class PublicationJournal
     /**
      * Persists the pre-images and then the journal. Nothing has been published yet when this throws.
      *
-     * @param list<array{path: string, before_sha256: string|null, after_sha256: string|null, mode: int|null, before: string|null}> $entries
+     * @param list<array{path: string, before_sha256: string|null, after_sha256: string|null, mode: int|null, before: string|null, preexisting_temporary_files: list<string>}> $entries
      * @param array<string, mixed> $context receipt template, observation and direct-edit details, stored as given
      */
     public static function begin(string $bundle, array $entries, array $context): void
@@ -101,6 +101,7 @@ final class PublicationJournal
                 'after_sha256' => $entry['after_sha256'],
                 'mode' => $entry['mode'],
                 'pre_image' => $preImage,
+                'preexisting_temporary_files' => $entry['preexisting_temporary_files'],
             ];
         }
         self::validateEntries($recorded, $bundle);
@@ -245,7 +246,7 @@ final class PublicationJournal
                     $before === $after && $current === $after => self::STATE_UNCHANGED,
                     $current === $after => self::STATE_AFTER,
                     $current === $before => self::STATE_BEFORE,
-                    $current === null && $before !== null && self::displacedBackup($absolute, $before) => self::STATE_DISPLACED,
+                    $current === null && $before !== null && self::displacedBackup($absolute, $before, self::preexisting($entry)) => self::STATE_DISPLACED,
                     default => self::STATE_UNEXPECTED,
                 };
             }
@@ -285,7 +286,7 @@ final class PublicationJournal
                 continue;
             }
             $digests = array_filter([self::nullableString($entry['before_sha256']), self::nullableString($entry['after_sha256'])]);
-            foreach (self::temporarySiblings($absolute) as $temporary) {
+            foreach (self::temporarySiblings($absolute, self::preexisting($entry)) as $temporary) {
                 $hash = hash_file('sha256', $temporary);
                 if (is_string($hash) && in_array($hash, $digests, true)) {
                     $found[self::relative($root, $temporary)] = true;
@@ -381,7 +382,7 @@ final class PublicationJournal
      * A bundle inside a published directory would hide real source changes among its own evidence, so publication
      * paths and the bundle must be disjoint.
      *
-     * @param list<array{path: string, before_sha256: string|null, after_sha256: string|null, mode: int|null, before: string|null}> $entries
+     * @param list<array{path: string, before_sha256: string|null, after_sha256: string|null, mode: int|null, before: string|null, preexisting_temporary_files: list<string>}> $entries
      */
     private static function assertBundleOutsidePublication(string $repositoryRoot, string $bundle, array $entries): void
     {
@@ -459,13 +460,23 @@ final class PublicationJournal
             if ($entry['before_sha256'] !== null && !is_int($mode)) {
                 throw new RuntimeException($where . ' records an original file without its permission bits.');
             }
+            $preexisting = $entry['preexisting_temporary_files'] ?? null;
+            if (!is_array($preexisting) || !array_is_list($preexisting)) {
+                throw new RuntimeException($where . ' does not record the temporary files that existed before publication.');
+            }
+            foreach ($preexisting as $name) {
+                if (!is_string($name) || !str_starts_with($name, basename($path))
+                    || preg_match(self::TEMPORARY_PATTERN, substr($name, strlen(basename($path)))) !== 1) {
+                    throw new RuntimeException($where . ' records a malformed pre-existing temporary file.');
+                }
+            }
         }
         if ($bundle === '') {
             throw new RuntimeException('Publication journal has no bundle.');
         }
     }
 
-    /** @return array{path: string, before_sha256: string|null, after_sha256: string|null, mode: int|null, before: string|null} */
+    /** @return array{path: string, before_sha256: string|null, after_sha256: string|null, mode: int|null, before: string|null, preexisting_temporary_files: list<string>} */
     private static function entry(string $root, string $absolute, ?string $before, ?string $afterSha256): array
     {
         $mode = $before === null ? false : @fileperms($absolute);
@@ -476,12 +487,16 @@ final class PublicationJournal
             'after_sha256' => $afterSha256,
             'mode' => is_int($mode) ? $mode & 0o7777 : null,
             'before' => $before,
+            // Siblings with a publisher temporary name that exist before publication starts are never this attempt's:
+            // recovery neither removes them nor reads them as a displaced original.
+            'preexisting_temporary_files' => array_map('basename', self::temporarySiblings($absolute)),
         ];
     }
 
-    private static function displacedBackup(string $absolute, string $beforeSha256): bool
+    /** @param list<string> $excluded */
+    private static function displacedBackup(string $absolute, string $beforeSha256, array $excluded): bool
     {
-        foreach (self::temporarySiblings($absolute) as $temporary) {
+        foreach (self::temporarySiblings($absolute, $excluded) as $temporary) {
             if (str_contains(basename($temporary), '-backup-') && hash_file('sha256', $temporary) === $beforeSha256) {
                 return true;
             }
@@ -490,8 +505,23 @@ final class PublicationJournal
         return false;
     }
 
-    /** @return list<string> */
-    private static function temporarySiblings(string $absolute): array
+    /**
+     * @param array<string, mixed> $entry a validated entry
+     * @return list<string>
+     */
+    private static function preexisting(array $entry): array
+    {
+        /** @var list<string> $names */
+        $names = $entry['preexisting_temporary_files'];
+
+        return $names;
+    }
+
+    /**
+     * @param list<string> $excluded basenames to leave out
+     * @return list<string>
+     */
+    private static function temporarySiblings(string $absolute, array $excluded = []): array
     {
         $directory = dirname($absolute);
         $prefix = basename($absolute);
@@ -499,7 +529,7 @@ final class PublicationJournal
         $found = [];
         foreach ($siblings === false ? [] : $siblings as $name) {
             // Exactly `<basename><suffix>`: `A.php.agent-edit-...` belongs to `A.php`, never to `A.php.bak`.
-            if (str_starts_with($name, $prefix)
+            if (str_starts_with($name, $prefix) && !in_array($name, $excluded, true)
                 && preg_match(self::TEMPORARY_PATTERN, substr($name, strlen($prefix))) === 1
                 && is_file($directory . '/' . $name) && !is_link($directory . '/' . $name)) {
                 $found[] = $directory . '/' . $name;

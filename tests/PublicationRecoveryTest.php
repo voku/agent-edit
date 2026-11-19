@@ -449,6 +449,9 @@ final class PublicationRecoveryTest extends TestCase
 
     public function testOnlyTemporaryFilesWithThisPublicationsBytesAreRemoved(): void
     {
+        // Present before the publication started, with exactly the bytes it would publish: still not this attempt's.
+        $preexisting = 'src/Calc.php.agent-edit-tx-stage-aaaaaaaaaaaaaaaa';
+        $this->project->write($preexisting, self::CALC_PUBLISHED);
         $this->journal($this->editBoth());
         $owned = 'src/Calc.php.agent-edit-tx-stage-0123456789abcdef';
         $foreign = 'src/Calc.php.agent-edit-tx-backup-fedcba9876543210';
@@ -461,6 +464,20 @@ final class PublicationRecoveryTest extends TestCase
         self::assertSame([$owned], $result['removed_temporary_files']);
         self::assertFileDoesNotExist($this->project->path($owned));
         self::assertFileExists($this->project->path($foreign));
+        self::assertSame(self::CALC_PUBLISHED, $this->project->read($preexisting));
+    }
+
+    public function testAPreexistingBackupNamedFileIsNoEvidenceOfADisplacedSource(): void
+    {
+        $this->project->write('src/Calc.php.agent-edit-tx-backup-aaaaaaaaaaaaaaaa', self::CALC);
+        $this->journal($this->editBoth());
+        unlink($this->project->path('src/Calc.php')); // removed by someone else, not moved aside by this publisher
+
+        $result = (new EditEngine())->recover($this->project->root, '.agent-edit/receipts/fix');
+
+        self::assertSame('conflict', $result['status']);
+        self::assertSame('unexpected', $result['files'][0]['state']);
+        self::assertFileExists($this->project->path('src/Calc.php.agent-edit-tx-backup-aaaaaaaaaaaaaaaa'));
     }
 
     public function testAParentDirectoryLinkedOutsideTheProjectIsAConflict(): void
