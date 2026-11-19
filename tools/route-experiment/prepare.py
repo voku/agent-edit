@@ -21,6 +21,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 KIT = Path(__file__).resolve().parent
@@ -54,8 +55,12 @@ def materialize(case: dict, repo: Path, source: Path | None) -> None:
     elif kind == 'git':
         if source is None:
             sys.exit(f"case {case['id']} needs --source: a local clone of {case['source']['repository']}")
-        archive = subprocess.run(['git', '-C', str(source), 'archive', '--format=tar', case['source']['commit']], check=True, capture_output=True).stdout
-        subprocess.run(['tar', '-x', '-C', str(repo)], input=archive, check=True)
+        # Every tracked file, including export-ignored tests and PHPUnit config (git archive would drop them), through
+        # a temporary index so the source clone's own index and work tree stay untouched.
+        with tempfile.TemporaryDirectory() as scratch:
+            env = {**os.environ, 'GIT_INDEX_FILE': str(Path(scratch) / 'index')}
+            subprocess.run(['git', '-C', str(source), 'read-tree', case['source']['commit']], env=env, check=True)
+            subprocess.run(['git', '-C', str(source), 'checkout-index', '-a', f'--prefix={repo}/'], env=env, check=True)
     else:
         sys.exit(f'unknown source type {kind}')
 
@@ -76,11 +81,70 @@ def install_tools(target: Path, versions: dict, composer: bool) -> dict:
     return {'agent_edit': f"tools/route-tools/vendor/bin/agent-edit", 'agent_map': 'tools/route-tools/vendor/bin/agent-map', 'installed': composer}
 
 
+def install_runtime_wrappers(target: Path, runtime: Path, log: Path) -> dict:
+    """In-session runs without Composer access: the binaries are wrappers around one prepared runtime (agent-edit at
+    the pinned release with its vendor directory) that log every call to <out>/tool-calls.log, outside the workspace,
+    so the route an agent took is read from the log rather than from its own account."""
+    bindir = target / 'vendor/bin'
+    bindir.mkdir(parents=True)
+    binaries = {'agent-edit': runtime / 'bin/agent-edit', 'agent-map': runtime / 'vendor/bin/agent-map'}
+    for name, binary in binaries.items():
+        if not binary.exists():
+            sys.exit(f'runtime has no {binary}')
+        wrapper = bindir / name
+        wrapper.write_text(
+            '#!/usr/bin/env bash\n'
+            f'printf \'%s\\t%s\\t%s\\n\' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" {name} "$*" >> {log}\n'
+            f'exec php {binary} "$@"\n'
+        )
+        wrapper.chmod(0o755)
+    return {'agent_edit': 'tools/route-tools/vendor/bin/agent-edit', 'agent_map': 'tools/route-tools/vendor/bin/agent-map', 'installed': True, 'runtime': str(runtime)}
+
+
+def vendor_shim(repo: Path, runtime: Path, extra_psr4: list[str]) -> None:
+    """A workspace vendor/ for git cases when Composer cannot install: autoload.php loads the runtime's autoloader and
+    the workspace's own PSR-4 roots (plus extra NS=DIR roots), vendor/bin/phpunit runs the runtime's PHPUnit."""
+    composer = json.loads((repo / 'composer.json').read_text())
+    roots = {}
+    for section in ('autoload', 'autoload-dev'):
+        for namespace, directory in (composer.get(section, {}).get('psr-4') or {}).items():
+            roots[namespace] = str(repo / directory)
+    for item in extra_psr4:
+        namespace, directory = item.split('=', 1)
+        roots[namespace] = directory
+    (repo / 'vendor/bin').mkdir(parents=True)
+    (repo / 'vendor/autoload.php').write_text(
+        '<?php\n'
+        f'require {json.dumps(str(runtime / "vendor/autoload.php"))};\n'
+        f'$roots = json_decode({json.dumps(json.dumps(roots))}, true);\n'
+        'spl_autoload_register(static function (string $class) use ($roots): void {\n'
+        '    foreach ($roots as $prefix => $dir) {\n'
+        '        if (str_starts_with($class, $prefix)) {\n'
+        "            $file = rtrim($dir, '/') . '/' . str_replace('\\\\', '/', substr($class, strlen($prefix))) . '.php';\n"
+        '            if (is_file($file)) { require $file; return; }\n'
+        '        }\n'
+        '    }\n'
+        '}, true, true);\n'
+    )
+    phpunit = repo / 'vendor/bin/phpunit'
+    phpunit.write_text(f'#!/usr/bin/env bash\nexec php {runtime / "vendor/bin/phpunit"} "$@"\n')
+    phpunit.chmod(0o755)
+
+
+def test_failures(repo: Path, command: str) -> list[str]:
+    """Names of the failing tests of a suite run (PHPUnit text output)."""
+    output = subprocess.run(command, cwd=repo, shell=True, capture_output=True, text=True).stdout
+    return sorted({line.split(') ', 1)[1].split(' with data set')[0].strip() for line in output.splitlines() if line[:1].isdigit() and ') ' in line[:6]})
+
+
 def guidance(tools: dict, repo: Path) -> str:
     """The minimal route guidance of arm C: binary locations plus the registry-backed instruction text."""
     text = ''
     if tools['installed']:
-        text = run([str(repo / tools['agent_edit']), 'instructions', '--format=text'], repo).stdout
+        # Call the runtime itself, not the logging wrapper: preparation must not show up as an agent's tool call.
+        binary = Path(tools['runtime']) / 'bin/agent-edit' if tools.get('runtime') else repo / tools['agent_edit']
+        command = ['php', str(binary)] if tools.get('runtime') else [str(binary)]
+        text = run(command + ['instructions', '--format=text'], repo).stdout
     return (
         '## Deterministic editing tools (optional)\n\n'
         f"`{tools['agent_edit']}` and `{tools['agent_map']}` are installed. Use them when they fit the change; "
@@ -95,6 +159,9 @@ def main() -> None:
     parser.add_argument('--out', required=True)
     parser.add_argument('--source', help='local clone for git cases (outside the workspace)')
     parser.add_argument('--no-composer', action='store_true', help='skip Composer installs (dry preparation only)')
+    parser.add_argument('--tools-runtime', help='in-session runs: wrap this prepared agent-edit runtime instead of installing (logs every call)')
+    parser.add_argument('--vendor-shim', help='in-session runs: give a git case a vendor/ from this runtime instead of composer install')
+    parser.add_argument('--extra-psr4', action='append', default=[], help='NS=DIR roots for --vendor-shim (repeatable)')
     args = parser.parse_args()
 
     cases = json.loads((KIT / 'cases.json').read_text())
@@ -108,14 +175,20 @@ def main() -> None:
     repo.mkdir(parents=True)
 
     materialize(case, repo, Path(args.source).resolve() if args.source else None)
-    if case.get('test_command') and not args.no_composer and (repo / 'composer.json').exists():
+    baseline_digest = tree_digest(repo)
+    baseline_failures = None
+    if case.get('test_command') and args.vendor_shim:
+        vendor_shim(repo, Path(args.vendor_shim).resolve(), args.extra_psr4)
+        baseline_failures = test_failures(repo, case['test_command'])
+    elif case.get('test_command') and not args.no_composer and (repo / 'composer.json').exists():
         run(['composer', 'install', '--no-interaction', '--no-progress', '--prefer-dist'], repo)
     (repo / '.gitignore').write_text(((repo / '.gitignore').read_text() if (repo / '.gitignore').exists() else '') + '\nvendor/\ntools/route-tools/vendor/\n.agent-map/\n.agent-edit/\n')
-    baseline_digest = tree_digest(repo)
 
     tools = None
     instruction_bytes = 0
-    if args.arm in ('B', 'C'):
+    if args.arm in ('B', 'C') and args.tools_runtime:
+        tools = install_runtime_wrappers(repo / 'tools/route-tools', Path(args.tools_runtime).resolve(), out / 'tool-calls.log')
+    elif args.arm in ('B', 'C'):
         tools = install_tools(repo / 'tools/route-tools', cases, not args.no_composer)
     if args.arm == 'C':
         section = guidance(tools, repo)
@@ -141,6 +214,7 @@ def main() -> None:
         'tools': tools,
         'instruction_overhead_bytes': instruction_bytes,
         'composer_installed': not args.no_composer,
+        'baseline_test_failures': baseline_failures,
         'kit_sha256': {name: sha256(KIT / name) for name in ['cases.json', 'prepare.py', 'grade.py', case['oracle']]},
     }
     (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
