@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## 0.7.0 - 2026-11-19
+
 ### Added
 
 - Write-ahead publication journal and `agent-edit recover --bundle=PATH` (`EditEngine::recover()`). Before the first source byte changes, `applyWithReceipt()` writes `publication-journal.json` (per touched path: digest before and after, pre-image under `before/`, receipt fields, pre-publication observation) and removes it once the receipt is persisted and the tree matches it. A surviving journal (lost receipt, incomplete rollback, killed process) is resolved by `recover`: `published` writes the receipt with changed files observed again by Git or the Map manifest, `not_published` records the failure, `rolled_back` restores every path from the pre-images, and `conflict` (a file matches neither digest) touches nothing. `apply`, `verify` and `undo` refuse a bundle with a pending journal. Recovered receipts carry a `recovery` block; normal receipts are unchanged.
