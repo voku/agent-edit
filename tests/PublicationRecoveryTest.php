@@ -14,6 +14,7 @@ use voku\AgentEdit\Receipt\ApplyRequest;
 use voku\AgentEdit\Receipt\PublicationJournal;
 use voku\AgentEdit\Receipt\ReceiptNotPersistedException;
 use voku\AgentEdit\Tests\Support\TemporaryProject;
+use voku\AgentEdit\Verify\MapManifestEvidence;
 
 /**
  * In-process failure points of the publication journal: evidence storage failing before or after publication, a
@@ -271,6 +272,90 @@ final class PublicationRecoveryTest extends TestCase
         self::assertTrue($this->receipt()['recovery']['rolled_back']);
     }
 
+    public function testARollbackReceiptOfAnEarlierAttemptOnAReusedBundleIsNotThisAttempts(): void
+    {
+        $this->journal($this->editBoth());
+        $this->project->write('src/Calc.php', self::CALC_PUBLISHED);
+        self::assertSame('rolled_back', (new EditEngine())->recover($this->project->root, '.agent-edit/receipts/fix')['status']);
+        self::assertTrue($this->receipt()['recovery']['rolled_back']);
+
+        // The bundle is reused (a failed receipt does not block that); the new attempt dies before publishing.
+        $this->journal($this->editBoth());
+        $result = (new EditEngine())->recover($this->project->root, '.agent-edit/receipts/fix');
+
+        self::assertSame('not_published', $result['status'], 'the earlier attempt\'s rollback must not be reported for this one');
+        self::assertFalse($this->receipt()['recovery']['rolled_back']);
+    }
+
+    public function testAJournalOriginalWithoutPermissionBitsIsRefusedBeforeAnythingChanges(): void
+    {
+        chmod($this->project->path('src/Calc.php'), 0o600);
+        $this->journal([
+            'files' => [],
+            'final_paths' => [],
+            'source_hashes' => [
+                $this->project->path('src/Calc.php') => 'sha256:' . hash('sha256', self::CALC),
+                $this->project->path('src/Show.php') => 'sha256:' . hash('sha256', self::SHOW),
+            ],
+        ]);
+        unlink($this->project->path('src/Calc.php')); // interrupted: Calc's deletion was published, Show's was not
+        $path = $this->bundle() . '/' . PublicationJournal::FILE;
+        $journal = json_decode((string) file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
+        unset($journal['entries'][0]['mode']);
+        file_put_contents($path, json_encode($journal, JSON_THROW_ON_ERROR));
+
+        $message = null;
+        try {
+            (new EditEngine())->recover($this->project->root, '.agent-edit/receipts/fix');
+        } catch (RuntimeException $exception) {
+            $message = $exception->getMessage();
+        }
+        self::assertNotNull($message, 'recovery must refuse');
+        self::assertStringContainsString('permission bits', $message);
+        self::assertFileDoesNotExist($this->project->path('src/Calc.php'));
+        self::assertFileExists($path);
+    }
+
+    public function testAKeptSuccessReceiptGetsTheManifestItNamesBack(): void
+    {
+        $manifest = ['src/Calc.php' => 'sha256:' . hash('sha256', self::CALC), 'src/Show.php' => 'sha256:' . hash('sha256', self::SHOW)];
+        $encoded = MapManifestEvidence::encode($manifest);
+        $this->journalWithManifest($manifest);
+        $this->project->write('src/Calc.php', self::CALC_PUBLISHED);
+        $this->project->write('src/Show.php', self::SHOW_PUBLISHED);
+        file_put_contents($this->bundle() . '/' . EditEngine::RECEIPT_FILE, json_encode([
+            'schema_version' => '1.0', 'task_id' => 'fix', 'status' => 'runner_succeeded',
+            'scope_evidence' => MapManifestEvidence::reference($encoded),
+        ], JSON_THROW_ON_ERROR));
+        file_put_contents($this->bundle() . '/' . MapManifestEvidence::FILE, 'damaged');
+
+        self::assertSame('published', (new EditEngine())->recover($this->project->root, '.agent-edit/receipts/fix')['status']);
+        self::assertSame($encoded, file_get_contents($this->bundle() . '/' . MapManifestEvidence::FILE));
+        self::assertFileDoesNotExist($this->bundle() . '/' . PublicationJournal::FILE);
+    }
+
+    public function testAKeptSuccessReceiptNamingAnotherManifestKeepsTheJournal(): void
+    {
+        $manifest = ['src/Calc.php' => 'sha256:' . hash('sha256', self::CALC), 'src/Show.php' => 'sha256:' . hash('sha256', self::SHOW)];
+        $this->journalWithManifest($manifest);
+        $this->project->write('src/Calc.php', self::CALC_PUBLISHED);
+        $this->project->write('src/Show.php', self::SHOW_PUBLISHED);
+        file_put_contents($this->bundle() . '/' . EditEngine::RECEIPT_FILE, json_encode([
+            'schema_version' => '1.0', 'task_id' => 'fix', 'status' => 'runner_succeeded',
+            'scope_evidence' => MapManifestEvidence::reference('another manifest'),
+        ], JSON_THROW_ON_ERROR));
+
+        $message = null;
+        try {
+            (new EditEngine())->recover($this->project->root, '.agent-edit/receipts/fix');
+        } catch (RuntimeException $exception) {
+            $message = $exception->getMessage();
+        }
+        self::assertNotNull($message, 'recovery must refuse');
+        self::assertStringContainsString('Map manifest', $message);
+        self::assertFileExists($this->bundle() . '/' . PublicationJournal::FILE);
+    }
+
     public function testRestoredFilesKeepTheirModeAndPreImagesArePrivate(): void
     {
         chmod($this->project->path('src/Calc.php'), 0o600);
@@ -520,6 +605,15 @@ final class PublicationRecoveryTest extends TestCase
     {
         PublicationJournal::begin($this->bundle(), PublicationJournal::entriesFromPrepared($prepared, $this->project->root), [
             'receipt' => ['schema_version' => '1.0', 'task_id' => $taskId, 'runner' => ['name' => 'source-edit-plan', 'dry_run' => false]],
+        ]);
+    }
+
+    /** @param array<string, string> $manifest */
+    private function journalWithManifest(array $manifest): void
+    {
+        PublicationJournal::begin($this->bundle(), PublicationJournal::entriesFromPrepared($this->editBoth(), $this->project->root), [
+            'receipt' => ['schema_version' => '1.0', 'task_id' => 'fix', 'runner' => ['name' => 'map-edit-plan', 'dry_run' => false]],
+            'observation' => ['git' => null, 'map_manifest' => $manifest, 'map_root' => $this->project->root],
         ]);
     }
 

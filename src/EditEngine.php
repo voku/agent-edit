@@ -652,7 +652,9 @@ final readonly class EditEngine
 
                 $existingSucceeded = ($existing['status'] ?? null) === 'runner_succeeded';
                 // A rollback an earlier recovery completed (only its result file was lost) stays recorded as a rollback.
-                $earlierRollback = ($existing['recovery']['rolled_back'] ?? null) === true && ($existing['status'] ?? null) === 'runner_failed';
+                // Only a rollback receipt written for this very journal counts: a reused bundle may hold an older one.
+                $earlierRollback = ($existing['recovery']['rolled_back'] ?? null) === true && ($existing['status'] ?? null) === 'runner_failed'
+                    && ($existing['recovery']['attempt'] ?? null) === $journal['attempt'];
                 $status = match (true) {
                     $verdict === 'interrupted' => 'rolled_back',
                     $verdict === 'not_published' && $earlierRollback => 'rolled_back',
@@ -660,6 +662,9 @@ final readonly class EditEngine
                     default => $verdict,
                 };
                 $keepReceipt = ($status === 'published' && $existingSucceeded) || ($verdict === 'not_published' && $earlierRollback);
+                if ($keepReceipt && $status === 'published') {
+                    $this->restoreBoundManifest($bundlePath, $journal, $existing);
+                }
                 if (!$keepReceipt) {
                     $this->invalidateVerification($bundlePath);
                     $this->writeAtomically($receiptPath, $this->json($this->recoveredReceipt($root, $bundlePath, $journal, $verdict, $status === 'published')));
@@ -803,9 +808,40 @@ final readonly class EditEngine
                 'acknowledged_api_changes' => is_array($direct['acknowledged_api_changes'] ?? null) ? $direct['acknowledged_api_changes'] : [],
             ];
         }
-        $receipt['recovery'] = ['source' => PublicationJournal::FILE, 'state' => $verdict, 'rolled_back' => $verdict === 'interrupted'];
+        $receipt['recovery'] = [
+            'source' => PublicationJournal::FILE,
+            'attempt' => $journal['attempt'] ?? null,
+            'state' => $verdict,
+            'rolled_back' => $verdict === 'interrupted',
+        ];
 
         return $receipt;
+    }
+
+    /**
+     * A kept success receipt binds the stored Map manifest by digest. When the journal holds the manifest that receipt
+     * names, it is written back if it was lost or damaged; when it does not, recovery stops and the journal stays.
+     *
+     * @param array<string, mixed> $journal
+     * @param array<string, mixed>|null $receipt
+     */
+    private function restoreBoundManifest(string $bundlePath, array $journal, ?array $receipt): void
+    {
+        $reference = is_array($receipt['scope_evidence'] ?? null) ? $receipt['scope_evidence'] : null;
+        if ($reference === null || ($reference['source'] ?? null) !== 'map_manifest') {
+            return;
+        }
+        $observation = is_array($journal['observation'] ?? null) ? $journal['observation'] : [];
+        $manifest = is_array($observation['map_manifest'] ?? null) ? $observation['map_manifest'] : null;
+        /** @var array<string, string>|null $manifest */
+        $encoded = $manifest === null ? null : MapManifestEvidence::encode($manifest);
+        if ($encoded === null || MapManifestEvidence::reference($encoded) !== $reference) {
+            throw new RuntimeException('The receipt names a Map manifest this publication journal does not hold; nothing was recorded. Inspect the bundle by hand.');
+        }
+        $path = $bundlePath . '/' . MapManifestEvidence::FILE;
+        if (@file_get_contents($path) !== $encoded) {
+            PublicationJournal::durableWrite($path, $encoded);
+        }
     }
 
     /**

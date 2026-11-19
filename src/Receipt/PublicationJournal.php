@@ -106,6 +106,9 @@ final class PublicationJournal
         self::validateEntries($recorded, $bundle);
         self::durableWrite($bundle . '/' . self::FILE, self::encode([
             'schema' => self::SCHEMA,
+            // Binds every record recovery writes (rollback receipt) to this attempt, so a reused bundle's earlier
+            // records are never mistaken for this attempt's.
+            'attempt' => bin2hex(random_bytes(16)),
             'entries' => $recorded,
         ] + $context), self::PRIVATE_MODE);
     }
@@ -190,7 +193,8 @@ final class PublicationJournal
         } catch (JsonException) {
             $journal = null;
         }
-        if (!is_array($journal) || ($journal['schema'] ?? null) !== self::SCHEMA || !is_array($journal['entries'] ?? null) || !array_is_list($journal['entries'])) {
+        if (!is_array($journal) || ($journal['schema'] ?? null) !== self::SCHEMA || !is_array($journal['entries'] ?? null) || !array_is_list($journal['entries'])
+            || !is_string($journal['attempt'] ?? null) || preg_match('/^[0-9a-f]{32}$/', $journal['attempt']) !== 1) {
             throw new RuntimeException('Publication journal is unreadable or of an unknown schema: ' . $path);
         }
         self::validateEntries($journal['entries'], $bundle);
@@ -446,8 +450,14 @@ final class PublicationJournal
             if ($entry['pre_image'] !== $expectedPreImage) {
                 throw new RuntimeException($where . ' is not bound to its pre-image in this bundle.');
             }
-            if (array_key_exists('mode', $entry) && $entry['mode'] !== null && (!is_int($entry['mode']) || $entry['mode'] < 0 || $entry['mode'] > 0o7777)) {
+            // An original file is only restorable with its recorded permission bits: without them a restore would fall
+            // back to a default mode and could widen access to a private source.
+            $mode = $entry['mode'] ?? null;
+            if ($mode !== null && (!is_int($mode) || $mode < 0 || $mode > 0o7777)) {
                 throw new RuntimeException($where . ' has malformed permission bits.');
+            }
+            if ($entry['before_sha256'] !== null && !is_int($mode)) {
+                throw new RuntimeException($where . ' records an original file without its permission bits.');
             }
         }
         if ($bundle === '') {

@@ -85,7 +85,8 @@ final class PublicationCrashRecoveryTest extends TestCase
         self::assertFileDoesNotExist($bundle . '/' . PublicationJournal::FILE);
         $receipt = $this->receipt();
         self::assertSame('runner_failed', $receipt['status']);
-        self::assertSame(['source' => PublicationJournal::FILE, 'state' => 'interrupted', 'rolled_back' => true], $receipt['recovery']);
+        self::assertMatchesRegularExpression('/^[0-9a-f]{32}$/', $receipt['recovery']['attempt']);
+        self::assertSame(['source' => PublicationJournal::FILE, 'state' => 'interrupted', 'rolled_back' => true], array_diff_key($receipt['recovery'], ['attempt' => true]));
         self::assertSame([], $receipt['changed_files'], 'after the rollback git observes no change by this plan');
 
         // The bundle is consistent again: a fresh attempt may reuse it, and recovering twice changes nothing.
