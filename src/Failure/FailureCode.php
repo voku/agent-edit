@@ -24,9 +24,10 @@ enum FailureCode: string
     case ApiChangeRefused = 'api_change_refused';
     case TargetExists = 'target_exists';
     case ApplyFailed = 'apply_failed';
+    case RecoveryRequired = 'recovery_required';
     case Failed = 'failed';
 
-    /** @return 'fix_arguments'|'provide_input'|'replan'|'refresh_map_and_replan'|'rebuild_map_with_phpstan'|'reread_and_retry'|'disambiguate_anchor'|'merge_edits'|'use_map_plan_or_acknowledge'|'edit_existing_file'|'inspect_working_tree'|'report' */
+    /** @return 'fix_arguments'|'provide_input'|'replan'|'refresh_map_and_replan'|'rebuild_map_with_phpstan'|'reread_and_retry'|'disambiguate_anchor'|'merge_edits'|'use_map_plan_or_acknowledge'|'edit_existing_file'|'inspect_working_tree'|'recover_bundle'|'report' */
     public function nextAction(): string
     {
         return match ($this) {
@@ -41,6 +42,7 @@ enum FailureCode: string
             self::ApiChangeRefused => 'use_map_plan_or_acknowledge',
             self::TargetExists => 'edit_existing_file',
             self::ApplyFailed => 'inspect_working_tree',
+            self::RecoveryRequired => 'recover_bundle',
             self::Failed => 'report',
         };
     }
@@ -62,6 +64,7 @@ enum FailureCode: string
             self::ApiChangeRefused => 'Nothing was changed. The edit removes or changes a class, function or non-private method signature; use the matching agent-map plan, or set allow_signature_change after checking the callers yourself.',
             self::TargetExists => 'Nothing was changed. A file to create already exists; change it with an edit or pick another path.',
             self::ApplyFailed => 'The transaction rolled back every source. Inspect `git status` and the receipt bundle before trying again.',
+            self::RecoveryRequired => 'The bundle has an unfinished publication (publication-journal.json): sources and evidence may disagree. Run `agent-edit recover --bundle=PATH`; it writes the missing receipt, or rolls an interrupted publication back, and reports a conflict instead of touching files someone else changed.',
             self::Failed => 'No automated recovery is known. Inspect `git status` and the newest bundle under `.agent-edit/receipts` before retrying, and report the message if it persists.',
         };
     }

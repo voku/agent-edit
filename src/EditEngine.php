@@ -20,11 +20,16 @@ use voku\AgentEdit\Apply\FileTransaction;
 use voku\AgentEdit\Apply\MaplessPlanApplier;
 use voku\AgentEdit\Apply\MutationLock;
 use voku\AgentEdit\Apply\PlanApplier;
+use voku\AgentEdit\Apply\SourceEditPlanApplier;
+use voku\AgentEdit\Apply\SourceEditPreparation;
+use voku\AgentEdit\Apply\WorkingTreeSnapshot;
 use voku\AgentEdit\Apply\WorkingTreeSnapshotter;
 use voku\AgentEdit\Capability\CapabilityRegistry;
 use voku\AgentEdit\Capability\PlanCapability;
 use voku\AgentEdit\Receipt\ApplyRequest;
+use voku\AgentEdit\Plan\SourceEditPlanDocument;
 use voku\AgentEdit\Receipt\EditReceipt;
+use voku\AgentEdit\Receipt\PublicationJournal;
 use voku\AgentEdit\Receipt\ReceiptNotPersistedException;
 use voku\AgentEdit\Verify\BundleVerifier;
 use voku\AgentEdit\Verify\ImportResidueCheck;
@@ -49,6 +54,7 @@ final readonly class EditEngine
     public const RECEIPT_FILE = 'execution.json';
     public const VERIFICATION_FILE = 'verification-result.json';
     public const UNDO_RESULT_FILE = SourceEditVerifier::UNDO_RESULT_FILE;
+    public const RECOVERY_RESULT_FILE = 'recovery-result.json';
 
     /**
      * @param array<class-string<PlanApplier|MaplessPlanApplier>, PlanApplier|MaplessPlanApplier> $applierOverrides test seams keyed by applier class
@@ -161,6 +167,7 @@ final readonly class EditEngine
         $failure = null;
         $manifestBefore = null;
         $preview = ['changes' => [], 'diff' => ''];
+        $receiptTemplate = $this->receiptTemplate($request, $plan, $planRaw, $capability, $map->mapDigest(), 'sha256:' . $mapIndexHash);
 
         if ($request->dryRun) {
             $before = $snapshotter->capture($request->repositoryRoot);
@@ -186,11 +193,11 @@ final readonly class EditEngine
             try {
                 $result = $this->mutationLock->synchronized(
                     $request->repositoryRoot,
-                    static function () use ($applier, $plan, $map, $request, $snapshotter, &$before, &$after, &$manifestBefore): EditResult {
+                    static function () use ($applier, $plan, $map, $request, $snapshotter, $receiptTemplate, &$before, &$after, &$manifestBefore): EditResult {
                         $before = $snapshotter->capture($request->repositoryRoot);
                         try {
+                            $prepared = $applier->preflight($plan, $map, $request->mapRoot);
                             if (!$before->available) {
-                                $prepared = $applier->preflight($plan, $map, $request->mapRoot);
                                 $root = realpath($request->mapRoot);
                                 if (!is_string($root)) {
                                     throw new RuntimeException('Unable to resolve refactor map root for observation.');
@@ -210,6 +217,8 @@ final readonly class EditEngine
                                 }
                                 $manifestBefore = MapManifestEvidence::capture($map, $request->mapRoot, $publicationPaths);
                             }
+                            // Write-ahead: from here on a killed process or a lost receipt leaves a journal to recover from.
+                            PublicationJournal::start($request, $receiptTemplate, $prepared, $before, $manifestBefore, null);
                             $result = $applier->apply($plan, $map, $request->mapRoot);
                         } catch (Throwable $exception) {
                             $after = $snapshotter->capture($request->repositoryRoot);
@@ -237,7 +246,7 @@ final readonly class EditEngine
             throw new RuntimeException('Refactor execution completed without a working-tree observation.');
         }
         $receiptPath = $request->outputDirectory . '/' . self::RECEIPT_FILE;
-        $changedFiles = $after->changedPathsSince($before);
+        $changedFiles = $this->withoutBundlePaths($after->changedPathsSince($before), $request->repositoryRoot, $request->outputDirectory);
         try {
             $observed = [
                 'changed_files' => $changedFiles,
@@ -286,6 +295,7 @@ final readonly class EditEngine
 
             throw $writeFailure;
         }
+        $this->settleJournal($request->outputDirectory, $request->repositoryRoot, $result->status);
 
         $receipt = new EditReceipt(
             $result->status,
@@ -300,7 +310,7 @@ final readonly class EditEngine
         );
 
         if ($failure !== null) {
-            throw $failure;
+            throw $this->withPendingRecovery($failure, $request->outputDirectory);
         }
 
         return $receipt;
@@ -323,6 +333,7 @@ final readonly class EditEngine
         $after = null;
         $failure = null;
         $preview = ['changes' => [], 'diff' => ''];
+        $receiptTemplate = $this->receiptTemplate($request, $plan, $planRaw, $capability, null, null);
 
         if ($request->dryRun) {
             $before = $snapshotter->capture($request->repositoryRoot);
@@ -349,9 +360,13 @@ final readonly class EditEngine
             try {
                 $result = $this->mutationLock->synchronized(
                     $request->repositoryRoot,
-                    static function () use ($applier, $plan, $request, $snapshotter, &$before, &$after): EditResult {
+                    static function () use ($applier, $plan, $request, $snapshotter, $receiptTemplate, &$before, &$after): EditResult {
                         $before = $snapshotter->capture($request->repositoryRoot);
                         try {
+                            $direct = $applier instanceof SourceEditPlanApplier
+                                ? self::directJournalDetails($applier->prepare(SourceEditPlanDocument::fromArray($plan), $request->repositoryRoot))
+                                : null;
+                            PublicationJournal::start($request, $receiptTemplate, $applier->preflight($plan, $request->repositoryRoot), $before, null, $direct);
                             $result = $applier->apply($plan, $request->repositoryRoot);
                         } catch (Throwable $exception) {
                             $after = $snapshotter->capture($request->repositoryRoot);
@@ -376,7 +391,7 @@ final readonly class EditEngine
         }
 
         $receiptPath = $request->outputDirectory . '/' . self::RECEIPT_FILE;
-        $changedFiles = $after->changedPathsSince($before);
+        $changedFiles = $this->withoutBundlePaths($after->changedPathsSince($before), $request->repositoryRoot, $request->outputDirectory);
         try {
             $direct = [];
             if ($result->status === 'runner_succeeded') {
@@ -436,6 +451,7 @@ final readonly class EditEngine
 
             throw $writeFailure;
         }
+        $this->settleJournal($request->outputDirectory, $request->repositoryRoot, $result->status);
 
         $receipt = new EditReceipt(
             $result->status,
@@ -449,7 +465,7 @@ final readonly class EditEngine
             $changedFiles,
         );
         if ($failure !== null) {
-            throw $failure;
+            throw $this->withPendingRecovery($failure, $request->outputDirectory);
         }
 
         return $receipt;
@@ -470,6 +486,7 @@ final readonly class EditEngine
             throw new RuntimeException('Project root not found: ' . $repositoryRoot);
         }
         $bundlePath = $this->insideExisting($root, $bundle, 'bundle', true);
+        $this->assertNoPendingPublication($bundlePath);
         $receipt = $this->readReceipt($bundlePath . '/' . self::RECEIPT_FILE);
         if (($receipt['runner']['name'] ?? null) !== 'source-edit-plan'
             || ($receipt['status'] ?? null) !== 'runner_succeeded'
@@ -546,12 +563,327 @@ final readonly class EditEngine
     }
 
     /**
+     * Resolves an unfinished publication recorded in a bundle's `publication-journal.json` (a lost receipt, an
+     * incomplete rollback or a killed process). The tree is observed against the journal under the mutation lock:
+     *
+     * - `published`: every path has its published bytes. A receipt is written (unless one already records the
+     *   success); its changed files are observed again by git (or the stored Map manifest), never taken from the
+     *   journal, so `verify` still decides on independent evidence.
+     * - `not_published`: every path still has its original bytes. A `runner_failed` receipt records that.
+     * - `interrupted`: a mix. Every path is restored from the bundle's pre-images (all-or-nothing, like a failed apply)
+     *   and a `runner_failed` receipt records the rollback.
+     * - `conflict`: some path matches neither digest, so someone else changed it. Nothing is touched and the journal
+     *   stays, so recovery can be retried once the conflict is resolved by hand.
+     *
+     * Publisher temporary files next to journaled paths are removed in every non-conflict case. Running it again
+     * after success reports `nothing_to_recover`.
+     *
+     * @param (Closure(string): void)|null $authorizeMutation host authorization hook, called before anything is changed
+     * @return array<string, mixed> the recovery result (also persisted as `recovery-result.json` unless it is a conflict)
+     */
+    public function recover(string $repositoryRoot, string $bundle, ?Closure $authorizeMutation = null): array
+    {
+        $root = realpath($repositoryRoot);
+        if (!is_string($root)) {
+            throw new RuntimeException('Project root not found: ' . $repositoryRoot);
+        }
+        $root = rtrim(str_replace('\\', '/', $root), '/');
+        $bundlePath = $this->insideExisting($root, $bundle, 'bundle', true);
+
+        return $this->withBundleLock($bundlePath, function () use ($root, $bundlePath, $authorizeMutation): array {
+            $journal = PublicationJournal::read($bundlePath);
+            if ($journal === null) {
+                return $this->recoveryResult('nothing_to_recover', null, [], []);
+            }
+            /** @var list<array<string, mixed>> $entries */
+            $entries = array_values(array_filter($journal['entries'], 'is_array'));
+            $taskId = (string) ($journal['receipt']['task_id'] ?? '');
+
+            $observed = PublicationJournal::observe($root, $entries);
+            $receiptPath = $bundlePath . '/' . self::RECEIPT_FILE;
+            $existing = is_file($receiptPath) ? $this->readReceipt($receiptPath) : null;
+            if ($observed['verdict'] === 'conflict' || ($existing !== null && ($existing['status'] ?? null) === 'runner_succeeded' && $observed['verdict'] !== 'published')) {
+                return $this->recoveryResult('conflict', $taskId, $observed['files'], []);
+            }
+
+            if ($authorizeMutation !== null) {
+                $authorizeMutation($taskId);
+            }
+            $outcome = null;
+            $this->mutationLock->synchronized($root, function () use ($root, $bundlePath, $journal, $entries, $observed, $existing, $receiptPath, &$outcome): EditResult {
+                // Observed again under the lock: nothing may have changed while the host was authorizing.
+                $current = PublicationJournal::observe($root, $entries);
+                if ($current !== $observed) {
+                    throw new RuntimeException('Sources changed while recovery was being authorized; nothing was changed. Run recover again.');
+                }
+                $verdict = $current['verdict'];
+                if ($verdict === 'interrupted') {
+                    $this->rollBackFromJournal($root, $bundlePath, $entries, $current['files']);
+                }
+                $stray = PublicationJournal::strayTemporaryFiles($root, $entries);
+                foreach ($stray as $relative) {
+                    if (!@unlink($root . '/' . $relative)) {
+                        throw new RuntimeException('Unable to remove publisher temporary file: ' . $relative);
+                    }
+                }
+                $succeeded = $verdict === 'published';
+                // Keep a receipt only when it already records this exact outcome (killed after the receipt was written);
+                // any other receipt in the bundle describes an earlier attempt and is replaced.
+                if (!($succeeded && $existing !== null && ($existing['status'] ?? null) === 'runner_succeeded')) {
+                    $this->invalidateVerification($bundlePath);
+                    $this->writeAtomically($receiptPath, $this->json($this->recoveredReceipt($root, $bundlePath, $journal, $verdict, $succeeded)));
+                }
+                $outcome = $this->recoveryResult($verdict === 'interrupted' ? 'rolled_back' : $verdict, (string) ($journal['receipt']['task_id'] ?? ''), $current['files'], $stray);
+                $this->writeAtomically($bundlePath . '/' . self::RECOVERY_RESULT_FILE, $this->json($outcome));
+                PublicationJournal::remove($bundlePath);
+
+                return new EditResult(status: 'runner_succeeded', exitCode: 0);
+            });
+
+            return (array) $outcome;
+        });
+    }
+
+    /**
+     * Restores every journaled path to its recorded original state in one transaction. Exact recorded bytes are put
+     * back, so they are not syntax-checked again (the original may itself have been the syntax error being repaired).
+     *
+     * @param list<array<string, mixed>> $entries
+     * @param list<array{path: string, state: string}> $states
+     */
+    private function rollBackFromJournal(string $root, string $bundlePath, array $entries, array $states): void
+    {
+        $stateByPath = array_column($states, 'state', 'path');
+        $operations = [];
+        foreach ($entries as $entry) {
+            $relative = PublicationJournal::canonical((string) $entry['path']);
+            $state = $stateByPath[$relative] ?? PublicationJournal::STATE_UNEXPECTED;
+            if ($state === PublicationJournal::STATE_BEFORE) {
+                continue;
+            }
+            $absolute = $root . '/' . $relative;
+            $before = is_string($entry['before_sha256'] ?? null) ? $entry['before_sha256'] : null;
+            $after = is_string($entry['after_sha256'] ?? null) ? $entry['after_sha256'] : null;
+            if ($before === null) {
+                $operations[] = FileOperation::delete($absolute, (string) $after);
+                continue;
+            }
+            $preImagePath = $bundlePath . '/' . PublicationJournal::canonical((string) ($entry['pre_image'] ?? ''));
+            $content = is_file($preImagePath) && !is_link($preImagePath) ? file_get_contents($preImagePath) : false;
+            if (!is_string($content) || !hash_equals($before, hash('sha256', $content))) {
+                throw new RuntimeException('Recorded pre-image of ' . $relative . ' is missing or was altered; refusing to restore it.');
+            }
+            $operations[] = FileOperation::write($absolute, $content, $state === PublicationJournal::STATE_AFTER ? $after : null);
+        }
+        if ($operations === []) {
+            return;
+        }
+        $restoreExactBytes = static fn (string $path): array => ['exit_code' => 0, 'stdout' => '', 'stderr' => ''];
+        (new FileTransaction(lintOperation: $restoreExactBytes))->run($operations, $root);
+    }
+
+    /**
+     * @param array<string, mixed> $journal
+     * @return array<string, mixed>
+     */
+    private function recoveredReceipt(string $root, string $bundlePath, array $journal, string $verdict, bool $succeeded): array
+    {
+        /** @var array<string, mixed> $receipt */
+        $receipt = is_array($journal['receipt'] ?? null) ? $journal['receipt'] : [];
+        $receipt['status'] = $succeeded ? 'runner_succeeded' : 'runner_failed';
+        $receipt['runner'] = (is_array($receipt['runner'] ?? null) ? $receipt['runner'] : []) + ['exit_code' => null];
+        $receipt['runner']['exit_code'] = $succeeded ? 0 : 1;
+
+        // Changed files are observed again, exactly as a normal run observes them; the journal's own path list is
+        // never used as evidence.
+        $observation = is_array($journal['observation'] ?? null) ? $journal['observation'] : [];
+        $git = is_array($observation['git'] ?? null) ? $observation['git'] : null;
+        $manifest = is_array($observation['map_manifest'] ?? null) ? $observation['map_manifest'] : null;
+        if ($git !== null) {
+            /** @var array<string, string> $entries */
+            $entries = is_array($git['entries'] ?? null) ? $git['entries'] : [];
+            $before = new WorkingTreeSnapshot(true, is_string($git['head'] ?? null) ? $git['head'] : null, $entries);
+            $after = $this->snapshotter->capture($root);
+            $receipt['changed_files'] = $this->withoutBundlePaths($after->changedPathsSince($before), $root, $bundlePath);
+            $receipt['changed_files_source'] = $after->available ? 'git_status_diff' : 'unavailable';
+        } elseif ($manifest !== null && is_string($observation['map_root'] ?? null)) {
+            /** @var array<string, string> $manifest */
+            $receipt['changed_files'] = MapManifestEvidence::changedSince($manifest, $observation['map_root']);
+            $receipt['changed_files_source'] = MapManifestEvidence::SOURCE;
+            $receipt['scope_evidence'] = MapManifestEvidence::reference(MapManifestEvidence::encode($manifest));
+        } else {
+            $receipt['changed_files'] = [];
+            $receipt['changed_files_source'] = 'unavailable';
+        }
+
+        if ($succeeded && is_array($journal['direct_edit'] ?? null)) {
+            $direct = $journal['direct_edit'];
+            $files = [];
+            foreach (is_array($direct['files'] ?? null) ? $direct['files'] : [] as $file) {
+                if (is_array($file) && is_string($file['path'] ?? null)) {
+                    $files[] = $file + ['pre_image' => ($file['before_sha256'] ?? null) === null ? null : PublicationJournal::PRE_IMAGE_DIR . '/' . $file['path']];
+                }
+            }
+            $paths = array_map(static fn (array $file): string => (string) $file['path'], $files);
+            $receipt['direct_edit'] = [
+                'files' => $files,
+                'git_ignored' => $git !== null ? $this->snapshotter->ignoredPaths($root, $paths) : [],
+                'acknowledged_api_changes' => is_array($direct['acknowledged_api_changes'] ?? null) ? $direct['acknowledged_api_changes'] : [],
+            ];
+        }
+        $receipt['recovery'] = ['source' => PublicationJournal::FILE, 'state' => $verdict, 'rolled_back' => $verdict === 'interrupted'];
+
+        return $receipt;
+    }
+
+    /**
+     * @param list<array{path: string, state: string}> $files
+     * @param list<string> $removedTemporaryFiles
+     * @return array<string, mixed>
+     */
+    private function recoveryResult(string $status, ?string $taskId, array $files, array $removedTemporaryFiles): array
+    {
+        return [
+            'schema_version' => '1.0',
+            'kind' => 'publication_recovery',
+            'status' => $status,
+            'task_id' => $taskId,
+            'files' => $files,
+            'removed_temporary_files' => $removedTemporaryFiles,
+        ];
+    }
+
+    /**
+     * Everything a receipt says about the run except its outcome and observations; also stored in the journal so a
+     * recovered receipt has exactly the shape of a normal one.
+     *
+     * @param array<string, mixed> $plan
+     * @return array<string, mixed>
+     */
+    private function receiptTemplate(ApplyRequest $request, array $plan, string $planRaw, PlanCapability $capability, ?string $mapDigest, ?string $mapIndexSha256): array
+    {
+        return [
+            'schema_version' => '1.0',
+            'task_id' => $request->label,
+            'plan' => [
+                'path' => $request->planPath,
+                'sha256' => 'sha256:' . hash('sha256', $planRaw),
+                'type' => $plan['type'] ?? null,
+                'contract_version' => $plan['contract_version'] ?? null,
+                'target_id' => $plan['target_id'] ?? null,
+            ],
+            'map_digest' => $mapDigest,
+            'map_index_sha256' => $mapIndexSha256,
+            'runner' => [
+                'name' => $capability->runner,
+                'exit_code' => null,
+                'dry_run' => false,
+                'model_input_tokens' => 0,
+                'model_tool_calls' => 0,
+            ],
+        ];
+    }
+
+    /** @return array{files: list<array{path: string, before_sha256: string|null, after_sha256: string, edits: int}>, acknowledged_api_changes: list<string>} */
+    private static function directJournalDetails(SourceEditPreparation $prepared): array
+    {
+        $files = [];
+        foreach ($prepared->files as $file) {
+            $files[] = [
+                'path' => $file['path'],
+                'before_sha256' => $file['before_sha256'],
+                'after_sha256' => $file['after_sha256'],
+                'edits' => $file['edits'],
+            ];
+        }
+
+        return ['files' => $files, 'acknowledged_api_changes' => $prepared->acknowledgedApiChanges];
+    }
+
+    /**
+     * Removes the journal once the receipt is persisted and the tree is in the state the receipt claims. Otherwise
+     * (a rollback that did not complete, or a tree that matches neither side) it stays for `recover()`.
+     */
+    private function settleJournal(string $bundle, string $root, string $status): void
+    {
+        try {
+            $journal = PublicationJournal::read($bundle);
+            if ($journal === null) {
+                return;
+            }
+            $entries = array_values(array_filter($journal['entries'], 'is_array'));
+            $verdict = PublicationJournal::observe($root, $entries)['verdict'];
+            if ($verdict === ($status === 'runner_succeeded' ? 'published' : 'not_published')) {
+                PublicationJournal::remove($bundle);
+            }
+        } catch (Throwable) {
+            // A journal that cannot be settled now stays; `recover()` resolves it and every bundle consumer refuses it.
+        }
+    }
+
+    /**
+     * Observed changes minus the receipt bundle's own files: the journal and pre-images are written between the two
+     * observations, and a plan can never target agent-edit's evidence (it is a protected path), so they are never part
+     * of what the plan changed.
+     *
+     * @param list<string> $changed
+     * @return list<string>
+     */
+    private function withoutBundlePaths(array $changed, string $repositoryRoot, string $bundle): array
+    {
+        $root = realpath($repositoryRoot);
+        $bundleReal = realpath($bundle);
+        if (!is_string($root) || !is_string($bundleReal)) {
+            return $changed;
+        }
+        $root = rtrim(str_replace('\\', '/', $root), '/');
+        $bundleReal = rtrim(str_replace('\\', '/', $bundleReal), '/');
+        if (!str_starts_with($bundleReal . '/', $root . '/')) {
+            return $changed;
+        }
+        $prefix = substr($bundleReal, strlen($root) + 1) . '/';
+
+        return array_values(array_filter($changed, static fn (string $path): bool => !str_starts_with($path, $prefix)));
+    }
+
+    /**
+     * A failed apply whose journal could not be settled (the rollback did not complete) needs `recover`, not a retry:
+     * report it as `recovery_required`, keeping the original failure as the cause and in the message.
+     */
+    private function withPendingRecovery(Throwable $failure, string $bundle): Throwable
+    {
+        if (!PublicationJournal::exists($bundle)) {
+            return $failure;
+        }
+
+        return new EditFailure(
+            $failure->getMessage() . ' The bundle keeps its publication journal; run `agent-edit recover --bundle=' . $bundle . '` to restore a consistent state.',
+            FailureCode::RecoveryRequired,
+            ['bundle' => $bundle],
+            $failure,
+        );
+    }
+
+    private function assertNoPendingPublication(string $bundle): void
+    {
+        if (PublicationJournal::exists($bundle)) {
+            throw new EditFailure(sprintf(
+                'Bundle %s has an unfinished publication (%s): its sources and evidence may disagree. Run `agent-edit recover --bundle=%s` first.',
+                $bundle,
+                PublicationJournal::FILE,
+                $bundle,
+            ), FailureCode::RecoveryRequired, ['bundle' => $bundle]);
+        }
+    }
+
+    /**
      * A bundle that records an applied plan is evidence of a real mutation: a retry, a dry run or another plan never
      * overwrites it. Any other bundle may receive a new receipt, but a verification result next to it can only describe
      * an earlier attempt, so it is removed first.
      */
     private function claimBundle(string $bundle): void
     {
+        $this->assertNoPendingPublication($bundle);
         $raw = @file_get_contents($bundle . '/' . self::RECEIPT_FILE);
         $receipt = is_string($raw) ? json_decode($raw, true) : null;
         if (is_array($receipt) && ($receipt['status'] ?? null) === 'runner_succeeded') {
@@ -632,6 +964,7 @@ final readonly class EditEngine
             throw new RuntimeException('Project root not found: ' . $repositoryRoot);
         }
         $bundlePath = $this->insideExisting($root, $bundle, 'bundle', true);
+        $this->assertNoPendingPublication($bundlePath);
         // A failed attempt must never leave an earlier successful verdict available to bundle consumers.
         $verificationPath = $bundlePath . '/' . self::VERIFICATION_FILE;
         if ((file_exists($verificationPath) || is_link($verificationPath)) && !@unlink($verificationPath)) {

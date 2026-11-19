@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+
+- Write-ahead publication journal and `agent-edit recover --bundle=PATH` (`EditEngine::recover()`). Before the first source byte changes, `applyWithReceipt()` writes `publication-journal.json` (per touched path: digest before and after, pre-image under `before/`, receipt fields, pre-publication observation) and removes it once the receipt is persisted and the tree matches it. A surviving journal (lost receipt, incomplete rollback, killed process) is resolved by `recover`: `published` writes the receipt with changed files observed again by Git or the Map manifest, `not_published` records the failure, `rolled_back` restores every path from the pre-images, and `conflict` (a file matches neither digest) touches nothing. `apply`, `verify` and `undo` refuse a bundle with a pending journal. Recovered receipts carry a `recovery` block; normal receipts are unchanged.
+- Failure code `recovery_required` (`next_action: recover_bundle`) for a lost receipt (`ReceiptNotPersistedException` is now a coded failure with `changed_files` and `output_directory` details), for an apply whose rollback could not complete, and for any command given a bundle with a pending journal. The generated agent instructions say to run `recover` instead of re-applying.
+
+### Fixed
+
+- A receipt that could not be written after publication left the working tree changed with no way back but version control. The publication journal now keeps everything needed to write the receipt or roll back.
+- Observed `changed_files` no longer include files inside the receipt bundle itself, which the journal and pre-images would otherwise add when the bundle directory is not ignored by Git.
+
+### Documentation
+
+- README: crash-safety guarantees per failure mode (exception, incomplete rollback, lost receipt, killed process, power loss) and the `recover` states.
+
 ## 0.6.4 - 2026-11-19
 
 ### Changed
