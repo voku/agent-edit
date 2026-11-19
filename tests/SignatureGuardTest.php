@@ -192,6 +192,10 @@ PHP;
         $guard = new SignatureGuard();
 
         self::assertSame('unchanged', $guard->compare(self::BASE, self::BASE)->status);
+        $changed = $guard->compare(self::BASE, str_replace("    public const VERSION = '1';\n", '', self::BASE));
+        self::assertSame('changed', $changed->status);
+        self::assertSame(['constant `Demo\\Service::VERSION` was removed or renamed'], $changed->changes);
+        self::assertNull($changed->reason);
         self::assertSame('unknown', $guard->compare("<?php\nfinal class {\n", self::BASE)->status);
         self::assertSame('the original source does not parse', $guard->compare("<?php\nfinal class {\n", self::BASE)->reason);
         self::assertSame('the edited source does not parse', $guard->compare(self::BASE, "<?php\nfinal class {\n")->reason);

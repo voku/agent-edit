@@ -57,6 +57,8 @@ final class ReceiptBundleTwoProcessTest extends TestCase
 
         $a = $this->worker('A', $bundle, $held, $release);
         $this->waitForFile($held);
+        // Independent of when B gets scheduled: while A sits between claim and receipt, its bundle lock is held.
+        self::assertFalse($this->bundleLockIsFree($bundle), 'A must hold the bundle lock from claim until its receipt is written');
         $b = $this->worker('B', $bundle);
         usleep(500_000); // B gets every chance to run inside the window A left open
         touch($release);
@@ -71,6 +73,24 @@ final class ReceiptBundleTwoProcessTest extends TestCase
         self::assertSame(2, $exitB);
         self::assertStringContainsString('already records an applied plan', (string) file_get_contents($this->dir . '/stderr-B.txt'));
         self::assertStringContainsString('return $a + $b;', (string) file_get_contents($this->dir . '/project/src/Calc.php'));
+    }
+
+    /** Non-blocking probe of the lock EditEngine takes for `$bundle`; the probe is always released again. */
+    private function bundleLockIsFree(string $bundle): bool
+    {
+        $path = sys_get_temp_dir() . '/agent-edit-bundle-' . hash('sha256', (string) realpath($bundle)) . '.lock';
+        $handle = fopen($path, 'c');
+        self::assertIsResource($handle);
+        try {
+            $acquired = flock($handle, LOCK_EX | LOCK_NB);
+            if ($acquired) {
+                flock($handle, LOCK_UN);
+            }
+
+            return $acquired;
+        } finally {
+            fclose($handle);
+        }
     }
 
     /** @return resource */

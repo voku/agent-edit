@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## 0.6.3 - 2026-11-19
+
 ### Fixed
 
 - A direct edit of a PHP file whose original source does not parse is no longer treated as "no API change". `SignatureGuard::compare()` returns a three-state `SignatureComparison` (`unchanged`, `changed`, `unknown`); an `unknown` verdict is refused with `api_change_refused` (`details.api_check = "unknown"`) unless the plan sets `allow_signature_change`, and an acknowledged one is recorded in `acknowledged_api_changes`. Previously a syntax repair could also remove or change a public method without acknowledgement. `SignatureGuard::changes()` keeps its old behaviour.
