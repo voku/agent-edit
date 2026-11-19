@@ -371,7 +371,14 @@ final readonly class FileTransaction
      */
     private function createRestricted(string $path, int $permissions)
     {
-        $handle = @fopen($path, 'xb');
+        // Created private first (umask 0077), then given its final bits before any byte is written: a staged copy of a
+        // private source is never readable by others, not even between creation and chmod.
+        $previousUmask = umask(0o077);
+        try {
+            $handle = @fopen($path, 'xb');
+        } finally {
+            umask($previousUmask);
+        }
         if (!is_resource($handle)) {
             return null;
         }

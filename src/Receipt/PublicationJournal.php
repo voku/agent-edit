@@ -330,7 +330,8 @@ final class PublicationJournal
 
     /**
      * Writes `$content` to a same-directory temporary file, flushes it to disk and renames it into place. With `$mode`,
-     * the temporary file gets those permission bits before any byte is written, so the content is never more readable.
+     * the temporary file is created private and gets those permission bits before any byte is written, so the content is
+     * never more readable, not even for a moment.
      */
     public static function durableWrite(string $path, string $content, ?int $mode = null): void
     {
@@ -339,7 +340,16 @@ final class PublicationJournal
             throw new RuntimeException('Unable to create evidence directory: ' . $directory);
         }
         $temporary = $path . '.tmp-' . getmypid() . '-' . bin2hex(random_bytes(4));
-        $handle = @fopen($temporary, 'xb');
+        // With a mode the file is created private (umask 0077) instead of world-readable first and restricted after:
+        // nobody can open it in between and keep reading through that handle once the bytes are written.
+        $previousUmask = $mode === null ? null : umask(0o077);
+        try {
+            $handle = @fopen($temporary, 'xb');
+        } finally {
+            if ($previousUmask !== null) {
+                umask($previousUmask);
+            }
+        }
         if ($handle === false) {
             throw new RuntimeException('Unable to write evidence: ' . $temporary);
         }

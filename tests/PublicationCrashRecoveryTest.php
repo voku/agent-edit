@@ -304,12 +304,13 @@ final class PublicationCrashRecoveryTest extends TestCase
         return array_values(array_filter($this->project->files(), static fn (string $path): bool => str_contains($path, '.agent-edit-tx-') || str_contains($path, '.agent-edit-plan-')));
     }
 
-    /** @return array<string, string> every project file outside the bundle with its digest */
+    /** @return array<string, string> every project file (bundle included, `.git` excluded) with its digest */
     private function snapshot(): array
     {
         $files = [];
         foreach ($this->project->files() as $path) {
-            if (!str_starts_with($path, '.agent-edit/') && !str_starts_with($path, '.git/')) {
+            // The bundle is included: a conflict must not rewrite the journal or write a receipt either.
+            if (!str_starts_with($path, '.git/')) {
                 $files[$path] = $this->project->hash($path);
             }
         }

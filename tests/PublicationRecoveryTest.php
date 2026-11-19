@@ -291,6 +291,20 @@ final class PublicationRecoveryTest extends TestCase
         self::assertSame(0o600, fileperms($this->project->path('src/Calc.php')) & 0o777, 'restored with its original mode, not 0644');
     }
 
+    public function testPrivateEvidenceWritesRestoreTheProcessUmask(): void
+    {
+        $previous = umask(0o022);
+        try {
+            PublicationJournal::durableWrite($this->bundle() . '/private.txt', 'secret', 0o600);
+            self::assertSame(0o022, umask(), 'the private creation mode must not leak into the rest of the process');
+            self::assertSame(0o600, fileperms($this->bundle() . '/private.txt') & 0o777);
+            PublicationJournal::durableWrite($this->bundle() . '/plain.txt', 'public');
+            self::assertSame(0o644, fileperms($this->bundle() . '/plain.txt') & 0o777, 'writes without a mode keep the umask default');
+        } finally {
+            umask($previous);
+        }
+    }
+
     public function testANonUtf8UntrackedFilenameNeitherBreaksJournalingNorEntersTheEvidence(): void
     {
         file_put_contents($this->project->path("notes-\xff.txt"), 'scratch');
