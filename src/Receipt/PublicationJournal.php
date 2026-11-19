@@ -17,9 +17,10 @@ use voku\AgentEdit\Verify\MapManifestEvidence;
  * before, or all after). A journal that survives therefore means "publication or its evidence did not finish": a
  * receipt write failed, a rollback was incomplete, or the process was killed. `EditEngine::recover()` resolves it.
  *
- * For every touched path it records the digest before and after publication (null = file absent) and, for an
- * existing file, a pre-image under `before/` so an interrupted publication can be rolled back from the bundle alone.
- * A move is two entries (source: present -> absent, destination: absent -> present).
+ * For every touched path it records the digest before and after publication (null = file absent), the permission
+ * bits of an existing file and, for an existing file, a private pre-image under `before/` so an interrupted publication
+ * can be rolled back from the bundle alone. A move is two entries (source: present -> absent, destination: absent ->
+ * present).
  *
  * Durability: the journal and pre-images are flushed (`fsync`) before they are renamed into place. That makes them
  * survive a killed process. Whether a rename survives power loss depends on the filesystem; that is not promised.
@@ -33,17 +34,21 @@ final class PublicationJournal
     /** Temporary files the publishers create next to a target (`<path>.agent-edit-{tx|plan}-{stage|backup}-<hex>`). */
     private const TEMPORARY_PATTERN = '/^\.agent-edit-(?:tx|plan)-(?:stage|backup)-[0-9a-f]{16}$/';
 
+    /** Pre-images hold source bytes; they are never more readable than private, whatever the umask. */
+    private const PRIVATE_MODE = 0o600;
+
     public const STATE_BEFORE = 'before';
     public const STATE_AFTER = 'after';
+    public const STATE_UNCHANGED = 'unchanged';
     public const STATE_DISPLACED = 'displaced';
     public const STATE_UNEXPECTED = 'unexpected';
 
     /**
      * Entries from an applier preflight (`files`, `final_paths`, `source_hashes`; absolute paths), with the current
-     * bytes of every existing file read now. Paths are made relative to `$root`.
+     * bytes and permission bits of every existing file read now. Paths are made relative to `$root`.
      *
      * @param array{files: array<string, string>, final_paths: array<string, string>, source_hashes: array<string, string>} $prepared
-     * @return list<array{path: string, before_sha256: string|null, after_sha256: string|null, before: string|null}>
+     * @return list<array{path: string, before_sha256: string|null, after_sha256: string|null, mode: int|null, before: string|null}>
      */
     public static function entriesFromPrepared(array $prepared, string $root): array
     {
@@ -78,7 +83,7 @@ final class PublicationJournal
     /**
      * Persists the pre-images and then the journal. Nothing has been published yet when this throws.
      *
-     * @param list<array{path: string, before_sha256: string|null, after_sha256: string|null, before: string|null}> $entries
+     * @param list<array{path: string, before_sha256: string|null, after_sha256: string|null, mode: int|null, before: string|null}> $entries
      * @param array<string, mixed> $context receipt template, observation and direct-edit details, stored as given
      */
     public static function begin(string $bundle, array $entries, array $context): void
@@ -88,19 +93,21 @@ final class PublicationJournal
             $preImage = null;
             if ($entry['before'] !== null) {
                 $preImage = self::PRE_IMAGE_DIR . '/' . $entry['path'];
-                self::durableWrite($bundle . '/' . $preImage, $entry['before']);
+                self::durableWrite($bundle . '/' . $preImage, $entry['before'], self::PRIVATE_MODE);
             }
             $recorded[] = [
                 'path' => $entry['path'],
                 'before_sha256' => $entry['before_sha256'],
                 'after_sha256' => $entry['after_sha256'],
+                'mode' => $entry['mode'],
                 'pre_image' => $preImage,
             ];
         }
+        self::validateEntries($recorded, $bundle);
         self::durableWrite($bundle . '/' . self::FILE, self::encode([
             'schema' => self::SCHEMA,
             'entries' => $recorded,
-        ] + $context));
+        ] + $context), self::PRIVATE_MODE);
     }
 
     /**
@@ -115,14 +122,16 @@ final class PublicationJournal
      */
     public static function start(ApplyRequest $request, array $receiptTemplate, array $prepared, WorkingTreeSnapshot $before, ?array $manifest, ?array $direct): void
     {
+        $entries = self::entriesFromPrepared($prepared, $request->repositoryRoot);
+        self::assertBundleOutsidePublication($request->repositoryRoot, $request->outputDirectory, $entries);
         $mapRoot = $manifest === null ? false : realpath($request->mapRoot);
         if ($manifest !== null) {
             self::durableWrite($request->outputDirectory . '/' . MapManifestEvidence::FILE, MapManifestEvidence::encode($manifest));
         }
-        self::begin($request->outputDirectory, self::entriesFromPrepared($prepared, $request->repositoryRoot), [
+        self::begin($request->outputDirectory, $entries, [
             'receipt' => $receiptTemplate,
             'observation' => [
-                'git' => $before->available ? ['head' => $before->head, 'entries' => (object) $before->entries] : null,
+                'git' => $before->available ? ['head' => $before->head, 'entries' => self::encodeSnapshotEntries($before->entries)] : null,
                 'map_manifest' => $manifest === null ? null : (object) $manifest,
                 'map_root' => is_string($mapRoot) ? $mapRoot : null,
             ],
@@ -130,12 +139,45 @@ final class PublicationJournal
         ]);
     }
 
+    /**
+     * Snapshot entries keyed by base64 of the raw path bytes: Git reports paths as bytes, and a non-UTF-8 name (even of
+     * an unrelated untracked file) must neither break the journal nor be altered on the way back.
+     *
+     * @param array<string, string> $entries
+     */
+    public static function encodeSnapshotEntries(array $entries): object
+    {
+        $encoded = [];
+        foreach ($entries as $path => $state) {
+            $encoded[base64_encode((string) $path)] = base64_encode($state);
+        }
+
+        return (object) $encoded;
+    }
+
+    /** @return array<string, string> */
+    public static function decodeSnapshotEntries(mixed $encoded): array
+    {
+        $entries = [];
+        foreach (is_array($encoded) ? $encoded : [] as $path => $state) {
+            $decodedPath = base64_decode((string) $path, true);
+            $decodedState = is_string($state) ? base64_decode($state, true) : false;
+            if ($decodedPath === false || $decodedState === false) {
+                throw new RuntimeException('Publication journal contains a malformed working-tree observation.');
+            }
+            $entries[$decodedPath] = $decodedState;
+        }
+        ksort($entries, SORT_STRING);
+
+        return $entries;
+    }
+
     public static function exists(string $bundle): bool
     {
         return is_file($bundle . '/' . self::FILE);
     }
 
-    /** @return array<string, mixed>|null the journal, or null when the bundle has none */
+    /** @return array<string, mixed>|null the journal (entries validated), or null when the bundle has none */
     public static function read(string $bundle): ?array
     {
         $path = $bundle . '/' . self::FILE;
@@ -148,9 +190,10 @@ final class PublicationJournal
         } catch (JsonException) {
             $journal = null;
         }
-        if (!is_array($journal) || ($journal['schema'] ?? null) !== self::SCHEMA || !is_array($journal['entries'] ?? null)) {
+        if (!is_array($journal) || ($journal['schema'] ?? null) !== self::SCHEMA || !is_array($journal['entries'] ?? null) || !array_is_list($journal['entries'])) {
             throw new RuntimeException('Publication journal is unreadable or of an unknown schema: ' . $path);
         }
+        self::validateEntries($journal['entries'], $bundle);
 
         return $journal;
     }
@@ -164,14 +207,16 @@ final class PublicationJournal
     }
 
     /**
-     * The observed state of every journaled path, and the overall verdict:
-     * `published` (all after), `not_published` (all before), `interrupted` (a mix, restorable from the bundle), or
-     * `conflict` (some path matches neither digest: someone else changed it, so nothing may be restored automatically).
+     * The observed state of every journaled path, and the overall verdict over the paths the publication changes:
+     * `published` (all after), `not_published` (all before), `interrupted` (a mix, restorable from the bundle),
+     * `conflict` (some path matches neither digest, or lies outside the project through a moved or linked parent:
+     * nothing may be restored automatically), or `unchanged` (the plan changes no bytes at all).
      *
-     * A path that is missing although it existed before, while a publisher backup with its original digest sits next
-     * to it, is `displaced`: publication had moved it aside and was killed before putting the new bytes in place.
+     * A path whose recorded bytes are the same before and after is `unchanged` and never counts as evidence either way.
+     * A path that is missing although it existed before, while a publisher backup with its original digest sits next to
+     * it, is `displaced`: publication had moved it aside and was killed before putting the new bytes in place.
      *
-     * @param list<array<string, mixed>> $entries
+     * @param list<array<string, mixed>> $entries validated entries
      * @return array{verdict: string, files: list<array{path: string, state: string}>}
      */
     public static function observe(string $root, array $entries): array
@@ -180,27 +225,35 @@ final class PublicationJournal
         $files = [];
         $states = [];
         foreach ($entries as $entry) {
-            $relative = self::canonical((string) ($entry['path'] ?? ''));
+            $relative = self::canonical((string) $entry['path']);
             $absolute = $root . '/' . $relative;
-            $before = self::nullableString($entry['before_sha256'] ?? null);
-            $after = self::nullableString($entry['after_sha256'] ?? null);
-            $current = is_file($absolute) && !is_link($absolute) ? hash_file('sha256', $absolute) : null;
-            $current = $current === false ? null : $current;
-            $present = file_exists($absolute) || is_link($absolute);
+            $before = self::nullableString($entry['before_sha256']);
+            $after = self::nullableString($entry['after_sha256']);
 
-            $state = match (true) {
-                $present && $current === null => self::STATE_UNEXPECTED,
-                $current === $after => self::STATE_AFTER,
-                $current === $before => self::STATE_BEFORE,
-                $current === null && $before !== null && self::displacedBackup($absolute, $before) => self::STATE_DISPLACED,
-                default => self::STATE_UNEXPECTED,
-            };
+            if (!self::parentInside($root, $absolute)) {
+                $state = self::STATE_UNEXPECTED;
+            } else {
+                $present = file_exists($absolute) || is_link($absolute);
+                $current = is_file($absolute) && !is_link($absolute) ? hash_file('sha256', $absolute) : null;
+                $current = $current === false ? null : $current;
+                $state = match (true) {
+                    $present && $current === null => self::STATE_UNEXPECTED,
+                    $before === $after && $current === $after => self::STATE_UNCHANGED,
+                    $current === $after => self::STATE_AFTER,
+                    $current === $before => self::STATE_BEFORE,
+                    $current === null && $before !== null && self::displacedBackup($absolute, $before) => self::STATE_DISPLACED,
+                    default => self::STATE_UNEXPECTED,
+                };
+            }
             $files[] = ['path' => $relative, 'state' => $state];
-            $states[$state] = true;
+            if ($state !== self::STATE_UNCHANGED) {
+                $states[$state] = true;
+            }
         }
 
         $verdict = match (true) {
             isset($states[self::STATE_UNEXPECTED]) => 'conflict',
+            $states === [] => 'unchanged',
             array_keys($states) === [self::STATE_AFTER] => 'published',
             array_keys($states) === [self::STATE_BEFORE] => 'not_published',
             default => 'interrupted',
@@ -210,19 +263,29 @@ final class PublicationJournal
     }
 
     /**
-     * Publisher temporary files (stage copies, backups) left next to journaled paths by an interrupted publication.
+     * Publisher temporary files (stage copies, backups) this publication left next to its journaled paths. Only files
+     * whose bytes are exactly the journaled original or published bytes of that path are reported, so a same-named
+     * file with other content is never taken for this attempt's leftover (and removing a reported file loses nothing:
+     * the original is in the pre-image, the published bytes are in the source or the plan).
      *
-     * @param list<array<string, mixed>> $entries
+     * @param list<array<string, mixed>> $entries validated entries
      * @return list<string> repository-relative paths
      */
-    public static function strayTemporaryFiles(string $root, array $entries): array
+    public static function ownedTemporaryFiles(string $root, array $entries): array
     {
         $root = self::realRoot($root);
         $found = [];
         foreach ($entries as $entry) {
-            $absolute = $root . '/' . self::canonical((string) ($entry['path'] ?? ''));
+            $absolute = $root . '/' . self::canonical((string) $entry['path']);
+            if (!self::parentInside($root, $absolute)) {
+                continue;
+            }
+            $digests = array_filter([self::nullableString($entry['before_sha256']), self::nullableString($entry['after_sha256'])]);
             foreach (self::temporarySiblings($absolute) as $temporary) {
-                $found[self::relative($root, $temporary)] = true;
+                $hash = hash_file('sha256', $temporary);
+                if (is_string($hash) && in_array($hash, $digests, true)) {
+                    $found[self::relative($root, $temporary)] = true;
+                }
             }
         }
         $paths = array_keys($found);
@@ -246,8 +309,30 @@ final class PublicationJournal
         return $path;
     }
 
-    /** Writes `$content` to a same-directory temporary file, flushes it to disk and renames it into place. */
-    public static function durableWrite(string $path, string $content): void
+    /**
+     * Whether the existing part of `$absolute`'s parent chain resolves inside `$root`: a journaled directory replaced by
+     * a link to somewhere else must never be read from, restored into or cleaned up.
+     */
+    public static function parentInside(string $root, string $absolute): bool
+    {
+        $directory = dirname($absolute);
+        while (!is_dir($directory) && !is_link($directory) && strlen($directory) > strlen($root)) {
+            $directory = dirname($directory);
+        }
+        $real = realpath($directory);
+        if (!is_string($real)) {
+            return false;
+        }
+        $real = rtrim(str_replace('\\', '/', $real), '/');
+
+        return $real === $root || str_starts_with($real . '/', $root . '/');
+    }
+
+    /**
+     * Writes `$content` to a same-directory temporary file, flushes it to disk and renames it into place. With `$mode`,
+     * the temporary file gets those permission bits before any byte is written, so the content is never more readable.
+     */
+    public static function durableWrite(string $path, string $content, ?int $mode = null): void
     {
         $directory = dirname($path);
         if (!is_dir($directory) && !@mkdir($directory, 0o775, true) && !is_dir($directory)) {
@@ -257,6 +342,11 @@ final class PublicationJournal
         $handle = @fopen($temporary, 'xb');
         if ($handle === false) {
             throw new RuntimeException('Unable to write evidence: ' . $temporary);
+        }
+        if ($mode !== null && !@chmod($temporary, $mode)) {
+            fclose($handle);
+            @unlink($temporary);
+            throw new RuntimeException('Unable to restrict evidence permissions: ' . $temporary);
         }
         $written = fwrite($handle, $content);
         $flushed = fflush($handle) && fsync($handle);
@@ -273,13 +363,98 @@ final class PublicationJournal
         return json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n";
     }
 
-    /** @return array{path: string, before_sha256: string|null, after_sha256: string|null, before: string|null} */
+    /**
+     * A bundle inside a published directory would hide real source changes among its own evidence, so publication
+     * paths and the bundle must be disjoint.
+     *
+     * @param list<array{path: string, before_sha256: string|null, after_sha256: string|null, mode: int|null, before: string|null}> $entries
+     */
+    private static function assertBundleOutsidePublication(string $repositoryRoot, string $bundle, array $entries): void
+    {
+        $prefix = self::bundlePrefix($repositoryRoot, $bundle);
+        if ($prefix === null) {
+            return;
+        }
+        foreach ($entries as $entry) {
+            if (str_starts_with($entry['path'] . '/', $prefix)) {
+                throw new RuntimeException(sprintf(
+                    'The receipt bundle %s contains the published path %s; choose an output directory outside the edited files.',
+                    rtrim($prefix, '/'),
+                    $entry['path'],
+                ));
+            }
+        }
+    }
+
+    /** The bundle's repository-relative directory with a trailing slash, or null when it lies outside the repository. */
+    public static function bundlePrefix(string $repositoryRoot, string $bundle): ?string
+    {
+        $root = realpath($repositoryRoot);
+        $real = realpath($bundle);
+        if (!is_string($root) || !is_string($real)) {
+            return null;
+        }
+        $root = rtrim(str_replace('\\', '/', $root), '/');
+        $real = rtrim(str_replace('\\', '/', $real), '/');
+        if ($real === $root || !str_starts_with($real . '/', $root . '/')) {
+            return $real === $root ? '' : null;
+        }
+
+        return substr($real, strlen($root) + 1) . '/';
+    }
+
+    /**
+     * Every entry must be complete and unambiguous before anything is classified or written: a canonical, unique path;
+     * both digests present (null only for a file absent on that side, never both); an existing original bound to its
+     * pre-image in this bundle.
+     *
+     * @param array<mixed> $entries
+     */
+    private static function validateEntries(array $entries, string $bundle): void
+    {
+        $seen = [];
+        foreach ($entries as $index => $entry) {
+            $where = 'Publication journal entry ' . $index;
+            if (!is_array($entry) || !is_string($entry['path'] ?? null)
+                || !array_key_exists('before_sha256', $entry) || !array_key_exists('after_sha256', $entry) || !array_key_exists('pre_image', $entry)) {
+                throw new RuntimeException($where . ' is incomplete.');
+            }
+            $path = self::canonical($entry['path']);
+            if (isset($seen[$path])) {
+                throw new RuntimeException($where . ' repeats the path ' . $path . '.');
+            }
+            $seen[$path] = true;
+            foreach (['before_sha256', 'after_sha256'] as $field) {
+                if ($entry[$field] !== null && (!is_string($entry[$field]) || preg_match('/^[0-9a-f]{64}$/', $entry[$field]) !== 1)) {
+                    throw new RuntimeException($where . ' has a malformed ' . $field . '.');
+                }
+            }
+            if ($entry['before_sha256'] === null && $entry['after_sha256'] === null) {
+                throw new RuntimeException($where . ' records a path that is absent before and after.');
+            }
+            $expectedPreImage = $entry['before_sha256'] === null ? null : self::PRE_IMAGE_DIR . '/' . $path;
+            if ($entry['pre_image'] !== $expectedPreImage) {
+                throw new RuntimeException($where . ' is not bound to its pre-image in this bundle.');
+            }
+            if (array_key_exists('mode', $entry) && $entry['mode'] !== null && (!is_int($entry['mode']) || $entry['mode'] < 0 || $entry['mode'] > 0o7777)) {
+                throw new RuntimeException($where . ' has malformed permission bits.');
+            }
+        }
+        if ($bundle === '') {
+            throw new RuntimeException('Publication journal has no bundle.');
+        }
+    }
+
+    /** @return array{path: string, before_sha256: string|null, after_sha256: string|null, mode: int|null, before: string|null} */
     private static function entry(string $root, string $absolute, ?string $before, ?string $afterSha256): array
     {
+        $mode = $before === null ? false : @fileperms($absolute);
+
         return [
             'path' => self::relative($root, $absolute),
             'before_sha256' => $before === null ? null : hash('sha256', $before),
             'after_sha256' => $afterSha256,
+            'mode' => is_int($mode) ? $mode & 0o7777 : null,
             'before' => $before,
         ];
     }

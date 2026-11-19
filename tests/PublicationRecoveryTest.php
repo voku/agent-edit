@@ -24,6 +24,8 @@ final class PublicationRecoveryTest extends TestCase
 {
     private const CALC = "<?php\n\nnamespace App;\n\nfinal class Calc\n{\n    public function add(int \$a, int \$b): int\n    {\n        return \$a - \$b;\n    }\n}\n";
     private const SHOW = "<?php\n\nnamespace App;\n\nfinal class Show\n{\n    public function name(): string\n    {\n        return 'old';\n    }\n}\n";
+    private const CALC_PUBLISHED = "<?php\n\nnamespace App;\n\nfinal class Calc\n{\n    public function add(int \$a, int \$b): int\n    {\n        return \$a + \$b;\n    }\n}\n";
+    private const SHOW_PUBLISHED = "<?php\n\nnamespace App;\n\nfinal class Show\n{\n    public function name(): string\n    {\n        return 'new';\n    }\n}\n";
 
     private TemporaryProject $project;
 
@@ -232,6 +234,269 @@ final class PublicationRecoveryTest extends TestCase
         }
         self::assertFileExists($this->bundle() . '/' . PublicationJournal::FILE);
         self::assertFileDoesNotExist($this->bundle() . '/' . EditEngine::RECEIPT_FILE);
+    }
+
+    public function testASuccessReceiptOverOriginalBytesIsAReceiptConflict(): void
+    {
+        $this->journal($this->editBoth());
+        file_put_contents($this->bundle() . '/' . EditEngine::RECEIPT_FILE, json_encode(['status' => 'runner_succeeded'], JSON_THROW_ON_ERROR));
+
+        $result = (new EditEngine())->recover($this->project->root, '.agent-edit/receipts/fix');
+
+        self::assertSame('conflict', $result['status']);
+        self::assertSame('receipt_claims_publication', $result['conflict']);
+        self::assertSame(self::CALC, $this->project->read('src/Calc.php'));
+        self::assertFileExists($this->bundle() . '/' . PublicationJournal::FILE);
+    }
+
+    public function testACompletedRollbackSurvivesALostRecoveryResult(): void
+    {
+        $this->journal($this->editBoth());
+        $this->project->write('src/Calc.php', self::CALC_PUBLISHED);
+        mkdir($this->bundle() . '/' . EditEngine::RECOVERY_RESULT_FILE . '/keep', 0o775, true);
+
+        try {
+            (new EditEngine())->recover($this->project->root, '.agent-edit/receipts/fix');
+            self::fail('The recovery result cannot be written.');
+        } catch (RuntimeException) {
+        }
+        self::assertSame(self::CALC, $this->project->read('src/Calc.php'), 'the rollback itself completed');
+        self::assertFileExists($this->bundle() . '/' . PublicationJournal::FILE);
+
+        rmdir($this->bundle() . '/' . EditEngine::RECOVERY_RESULT_FILE . '/keep');
+        rmdir($this->bundle() . '/' . EditEngine::RECOVERY_RESULT_FILE);
+        $result = (new EditEngine())->recover($this->project->root, '.agent-edit/receipts/fix');
+
+        self::assertSame('rolled_back', $result['status'], 'a retry must not turn the completed rollback into "never published"');
+        self::assertTrue($this->receipt()['recovery']['rolled_back']);
+    }
+
+    public function testRestoredFilesKeepTheirModeAndPreImagesArePrivate(): void
+    {
+        chmod($this->project->path('src/Calc.php'), 0o600);
+        $this->journal([
+            'files' => [],
+            'final_paths' => [],
+            'source_hashes' => [
+                $this->project->path('src/Calc.php') => 'sha256:' . hash('sha256', self::CALC),
+                $this->project->path('src/Show.php') => 'sha256:' . hash('sha256', self::SHOW),
+            ],
+        ]);
+        self::assertSame(0o600, fileperms($this->bundle() . '/before/src/Calc.php') & 0o777);
+        self::assertSame(0o600, fileperms($this->bundle() . '/before/src/Show.php') & 0o777, 'pre-images are private whatever the source mode');
+        unlink($this->project->path('src/Calc.php')); // the deletion of Calc was published, Show's was not
+
+        self::assertSame('rolled_back', (new EditEngine())->recover($this->project->root, '.agent-edit/receipts/fix')['status']);
+        self::assertSame(self::CALC, $this->project->read('src/Calc.php'));
+        self::assertSame(0o600, fileperms($this->project->path('src/Calc.php')) & 0o777, 'restored with its original mode, not 0644');
+    }
+
+    public function testANonUtf8UntrackedFilenameNeitherBreaksJournalingNorEntersTheEvidence(): void
+    {
+        file_put_contents($this->project->path("notes-\xff.txt"), 'scratch');
+        $this->writePlan();
+        mkdir($this->bundle() . '/' . EditEngine::RECEIPT_FILE . '/keep', 0o775, true);
+
+        try {
+            (new EditEngine())->applyWithReceipt($this->request());
+            self::fail('Expected the receipt write to fail.');
+        } catch (ReceiptNotPersistedException) {
+        }
+        rmdir($this->bundle() . '/' . EditEngine::RECEIPT_FILE . '/keep');
+        rmdir($this->bundle() . '/' . EditEngine::RECEIPT_FILE);
+
+        self::assertSame('published', (new EditEngine())->recover($this->project->root, '.agent-edit/receipts/fix')['status']);
+        self::assertSame(['src/Calc.php', 'src/Show.php'], $this->receipt()['changed_files']);
+        self::assertSame('passed', (new EditEngine())->verify($this->project->root, '.agent-edit/receipts/fix')['status']);
+    }
+
+    public function testAMalformedJournalIsRefusedBeforeAnythingChanges(): void
+    {
+        $this->journal($this->editBoth());
+        $this->project->write('src/Calc.php', self::CALC_PUBLISHED);
+        $path = $this->bundle() . '/' . PublicationJournal::FILE;
+        $journal = json_decode((string) file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
+        unset($journal['entries'][0]['before_sha256']);
+        file_put_contents($path, json_encode($journal, JSON_THROW_ON_ERROR));
+
+        try {
+            (new EditEngine())->recover($this->project->root, '.agent-edit/receipts/fix');
+            self::fail('A journal entry without its original digest must not be interpreted.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('incomplete', $exception->getMessage());
+        }
+        self::assertSame(self::CALC_PUBLISHED, $this->project->read('src/Calc.php'));
+    }
+
+    public function testBytesAPlanDoesNotChangeAreNeutral(): void
+    {
+        // Calc is "edited" to identical bytes, Show's real edit never happened: publication never started.
+        $this->journal([
+            'files' => [$this->project->path('src/Calc.php') => self::CALC, $this->project->path('src/Show.php') => self::SHOW_PUBLISHED],
+            'final_paths' => [],
+            'source_hashes' => [
+                $this->project->path('src/Calc.php') => 'sha256:' . hash('sha256', self::CALC),
+                $this->project->path('src/Show.php') => 'sha256:' . hash('sha256', self::SHOW),
+            ],
+        ]);
+        touch($this->project->path('src/Calc.php'), 1_000_000);
+
+        $result = (new EditEngine())->recover($this->project->root, '.agent-edit/receipts/fix');
+
+        self::assertSame('not_published', $result['status']);
+        self::assertContains(['path' => 'src/Calc.php', 'state' => PublicationJournal::STATE_UNCHANGED], $result['files']);
+        self::assertSame(1_000_000, filemtime($this->project->path('src/Calc.php')), 'an unchanged file is never rewritten');
+    }
+
+    public function testOnlyTemporaryFilesWithThisPublicationsBytesAreRemoved(): void
+    {
+        $this->journal($this->editBoth());
+        $owned = 'src/Calc.php.agent-edit-tx-stage-0123456789abcdef';
+        $foreign = 'src/Calc.php.agent-edit-tx-backup-fedcba9876543210';
+        $this->project->write($owned, self::CALC_PUBLISHED);
+        $this->project->write($foreign, 'somebody else\'s file that happens to match the naming pattern');
+
+        $result = (new EditEngine())->recover($this->project->root, '.agent-edit/receipts/fix');
+
+        self::assertSame('not_published', $result['status']);
+        self::assertSame([$owned], $result['removed_temporary_files']);
+        self::assertFileDoesNotExist($this->project->path($owned));
+        self::assertFileExists($this->project->path($foreign));
+    }
+
+    public function testAParentDirectoryLinkedOutsideTheProjectIsAConflict(): void
+    {
+        $this->journal($this->editBoth());
+        $outside = sys_get_temp_dir() . '/agent-edit-outside-' . bin2hex(random_bytes(6));
+        rename($this->project->path('src'), $outside);
+        symlink($outside, $this->project->path('src'));
+        file_put_contents($outside . '/Calc.php.agent-edit-tx-stage-0123456789abcdef', self::CALC);
+
+        try {
+            $result = (new EditEngine())->recover($this->project->root, '.agent-edit/receipts/fix');
+            self::assertSame('conflict', $result['status']);
+            self::assertSame('unexpected_file', $result['conflict']);
+            self::assertFileExists($outside . '/Calc.php.agent-edit-tx-stage-0123456789abcdef', 'nothing outside the project is cleaned up');
+        } finally {
+            unlink($this->project->path('src'));
+            exec('rm -rf ' . escapeshellarg($outside));
+        }
+    }
+
+    public function testABundleInsideAPublishedDirectoryIsRefusedBeforeWriting(): void
+    {
+        $this->writePlan();
+
+        try {
+            (new EditEngine())->applyWithReceipt(new ApplyRequest(
+                repositoryRoot: $this->project->root,
+                planPath: $this->project->path('plan.json'),
+                mapIndexPath: null,
+                mapRoot: $this->project->root,
+                outputDirectory: $this->project->path('src'),
+                label: 'fix',
+            ));
+            self::fail('A bundle that contains published paths would hide them from the evidence.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString('output directory outside the edited files', $exception->getMessage());
+        }
+        self::assertSame(self::CALC, $this->project->read('src/Calc.php'));
+        self::assertFileDoesNotExist($this->project->path('src/' . PublicationJournal::FILE));
+    }
+
+    public function testASuccessfulApplyThatCannotSettleItsJournalReportsRecoveryRequired(): void
+    {
+        $this->writePlan();
+        $real = new SourceEditPlanApplier();
+        $tampering = new class ($real, $this->project->path('src/Calc.php')) implements \voku\AgentEdit\Apply\MaplessPlanApplier {
+            public function __construct(private SourceEditPlanApplier $inner, private string $file)
+            {
+            }
+
+            public function preflight(array $plan, string $root): array
+            {
+                return $this->inner->preflight($plan, $root);
+            }
+
+            public function apply(array $plan, string $root): \voku\AgentEdit\Apply\EditResult
+            {
+                $result = $this->inner->apply($plan, $root);
+                file_put_contents($this->file, "<?php\n// changed by someone else right after publication\n");
+
+                return $result;
+            }
+        };
+
+        try {
+            (new EditEngine(applierOverrides: [SourceEditPlanApplier::class => $tampering]))->applyWithReceipt($this->request());
+            self::fail('A success whose journal stays must not look like plain success.');
+        } catch (EditFailure $exception) {
+            self::assertSame(FailureCode::RecoveryRequired, $exception->failureCode());
+        }
+        self::assertSame('runner_succeeded', $this->receipt()['status']);
+        self::assertFileExists($this->bundle() . '/' . PublicationJournal::FILE);
+    }
+
+    public function testRollbackAndReceiptFailingTogetherStillPointToRecovery(): void
+    {
+        $this->writePlan();
+        mkdir($this->bundle() . '/' . EditEngine::RECEIPT_FILE . '/keep', 0o775, true);
+        $renames = 0;
+        $engine = new EditEngine(applierOverrides: [
+            SourceEditPlanApplier::class => new SourceEditPlanApplier(static function (string $from, string $to) use (&$renames): bool {
+                return ++$renames === 1 && rename($from, $to);
+            }),
+        ]);
+
+        try {
+            $engine->applyWithReceipt($this->request());
+            self::fail('The publication must fail.');
+        } catch (EditFailure $exception) {
+            self::assertSame(FailureCode::RecoveryRequired, $exception->failureCode());
+            self::assertStringContainsString('rollback was incomplete', $exception->getMessage());
+        }
+    }
+
+    public function testABundleOutsideTheProjectIsRecoverableByItsAbsolutePath(): void
+    {
+        $this->writePlan();
+        $outside = sys_get_temp_dir() . '/agent-edit-outside-bundle-' . bin2hex(random_bytes(6));
+        mkdir($outside . '/' . EditEngine::RECEIPT_FILE . '/keep', 0o775, true);
+        try {
+            try {
+                (new EditEngine())->applyWithReceipt(new ApplyRequest(
+                    repositoryRoot: $this->project->root,
+                    planPath: $this->project->path('plan.json'),
+                    mapIndexPath: null,
+                    mapRoot: $this->project->root,
+                    outputDirectory: $outside,
+                    label: 'fix',
+                ));
+                self::fail('Expected the receipt write to fail.');
+            } catch (ReceiptNotPersistedException $exception) {
+                self::assertStringContainsString($outside, $exception->getMessage());
+            }
+            rmdir($outside . '/' . EditEngine::RECEIPT_FILE . '/keep');
+            rmdir($outside . '/' . EditEngine::RECEIPT_FILE);
+
+            self::assertSame('published', (new EditEngine())->recover($this->project->root, $outside)['status']);
+            self::assertFileDoesNotExist($outside . '/' . PublicationJournal::FILE);
+        } finally {
+            exec('rm -rf ' . escapeshellarg($outside));
+        }
+    }
+
+    /** @return array{files: array<string, string>, final_paths: array<string, string>, source_hashes: array<string, string>} */
+    private function editBoth(): array
+    {
+        return [
+            'files' => [$this->project->path('src/Calc.php') => self::CALC_PUBLISHED, $this->project->path('src/Show.php') => self::SHOW_PUBLISHED],
+            'final_paths' => [],
+            'source_hashes' => [
+                $this->project->path('src/Calc.php') => 'sha256:' . hash('sha256', self::CALC),
+                $this->project->path('src/Show.php') => 'sha256:' . hash('sha256', self::SHOW),
+            ],
+        ];
     }
 
     /**

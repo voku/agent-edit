@@ -37,8 +37,10 @@ receipt could not be written or the process was killed. Every journaled file is 
   published      all files have the published bytes: the receipt is written, changed files observed again
   not_published  all files have their original bytes: a failure receipt is written
   rolled_back    a mix: every file is restored from the bundle's pre-images and a failure receipt is written
-  conflict       a file matches neither digest (changed by someone else): nothing is touched, exit 1
-Publisher temporary files next to journaled paths are removed. Run `verify` afterwards as usual.
+  conflict       nothing is touched, the journal stays, exit 1. Either a file matches neither digest
+                 (unexpected_file: changed by someone else), or the bundle already has a success receipt
+                 while the files are not published (receipt_claims_publication: put the published bytes back)
+Publisher temporary files this publication left next to its paths are removed. Run `verify` afterwards as usual.
 
 TXT;
 
@@ -92,7 +94,9 @@ TXT;
                 echo '- removed temporary file ' . (string) $path . "\n";
             }
             if ($status === 'conflict') {
-                fwrite(STDERR, "[ERROR] A journaled file matches neither its original nor its published bytes; nothing was changed. Resolve those files by hand, then run recover again.\n");
+                fwrite(STDERR, ($result['conflict'] ?? null) === 'receipt_claims_publication'
+                    ? "[ERROR] The bundle already records a successful publication, but the journaled files do not have their published bytes; nothing was changed. Put the published bytes back (or remove the receipt deliberately), then run recover again.\n"
+                    : "[ERROR] A journaled file matches neither its original nor its published bytes; nothing was changed. Resolve those files by hand, then run recover again.\n");
             }
         }
 

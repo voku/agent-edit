@@ -16,12 +16,14 @@ final readonly class FileOperation
         public string $path,
         public ?string $content,
         public ?string $expectedSha256,
+        public ?int $mode = null,
     ) {
     }
 
-    public static function write(string $path, string $content, ?string $expectedSha256): self
+    /** @param int|null $mode permission bits for a created file (default 0644); an existing file keeps its own */
+    public static function write(string $path, string $content, ?string $expectedSha256, ?int $mode = null): self
     {
-        return new self($path, $content, $expectedSha256);
+        return new self($path, $content, $expectedSha256, $mode);
     }
 
     public static function delete(string $path, string $expectedSha256): self

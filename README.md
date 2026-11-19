@@ -215,9 +215,13 @@ Before the first source byte changes, under the mutation lock, `applyWithReceipt
 | Every path has its published bytes | `published`: a `runner_succeeded` receipt is written (unless one already records it). Its `changed_files` are observed again by Git (or the stored Map manifest), never taken from the journal, so `verify` still decides on independent evidence; any unrelated change made in the meantime makes the scope check fail closed. |
 | Every path has its original bytes | `not_published`: a `runner_failed` receipt records it. |
 | A mix of both, or a file a publisher had moved aside | `rolled_back`: every path is restored from the bundle's pre-images in one transaction (exact recorded bytes), and a `runner_failed` receipt records the rollback. |
-| Any path matches neither digest | `conflict` (exit code 1): someone else changed it. Nothing is touched and the journal stays; resolve the file by hand and run `recover` again. |
+| Any path matches neither digest, or lies outside the project through a moved or linked parent directory | `conflict` with `conflict: unexpected_file` (exit code 1): someone else changed it. Nothing is touched and the journal stays; resolve the file by hand and run `recover` again. |
+| The bundle already holds a `runner_succeeded` receipt, but the files are not in their published state | `conflict` with `conflict: receipt_claims_publication` (exit code 1): the process died after the receipt was written and the files were changed afterwards. Nothing is touched. Restoring the *original* bytes does not resolve this; put the published bytes back (or remove the receipt deliberately) and run `recover` again. |
+| The plan changes no bytes at all | Recorded as published when a success receipt exists, otherwise as `not_published`. |
 
-Publisher temporary files (`*.agent-edit-tx-*`, `*.agent-edit-plan-*`) next to journaled paths are removed in every non-conflict case. A recovered receipt carries a `recovery` block (`state`, `rolled_back`). Running `recover` again reports `nothing_to_recover`. Files outside the journal, such as uncommitted work in progress, are never touched.
+Publisher temporary files (`*.agent-edit-tx-*`, `*.agent-edit-plan-*`) next to journaled paths are removed in every non-conflict case, but only when their bytes are exactly the journaled original or published bytes of that path. A recovered receipt carries a `recovery` block (`state`, `rolled_back`). If a recovery completed its rollback but lost its result file, running it again keeps the rollback receipt. Otherwise running `recover` again reports `nothing_to_recover`. Files outside the journal, such as uncommitted work in progress, are never touched. Restored files get their original permission bits back; pre-images in the bundle are written private (`0600`).
+
+The bundle must not contain any path the plan publishes; such a plan is refused before anything is written. A bundle outside the project (any `outputDirectory` `applyWithReceipt()` accepts) can be recovered by its absolute path. `verify` and `undo` hold the bundle lock while they check for a pending journal and read the receipt.
 
 What is and is not promised:
 
