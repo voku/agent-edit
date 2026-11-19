@@ -53,6 +53,8 @@ def materialize(case: dict, repo: Path, source: Path | None) -> None:
     kind = case['source']['type']
     if kind == 'benchmark_fixture':
         run(['php', str(REPO_ROOT / 'tools/route-benchmark.php'), f'--fixture={repo}'], REPO_ROOT)
+    elif kind == 'generator':
+        run(['python3', str(KIT / case['source']['script']), str(repo), 'baseline'], REPO_ROOT)
     elif kind == 'git':
         if source is None:
             sys.exit(f"case {case['id']} needs --source: a local clone of {case['source']['repository']}")
@@ -107,7 +109,7 @@ def install_runtime_wrappers(target: Path, runtime: Path, log: Path) -> dict:
 
 def vendor_shim(repo: Path, runtime: Path, extra_psr4: list[str]) -> None:
     """A workspace vendor/ for git cases when Composer cannot install: autoload.php loads the runtime's autoloader and
-    the workspace's own PSR-4 roots (plus extra NS=DIR roots), vendor/bin/phpunit runs the runtime's PHPUnit."""
+    the workspace's own PSR-4 roots (plus extra NS=DIR roots); vendor/bin/phpunit and vendor/bin/phpstan run the runtime's."""
     composer = json.loads((repo / 'composer.json').read_text())
     roots = {}
     for section in ('autoload', 'autoload-dev'):
@@ -130,9 +132,11 @@ def vendor_shim(repo: Path, runtime: Path, extra_psr4: list[str]) -> None:
         '    }\n'
         '}, true, true);\n'
     )
-    phpunit = repo / 'vendor/bin/phpunit'
-    phpunit.write_text(f'#!/usr/bin/env bash\nexec php {runtime / "vendor/bin/phpunit"} "$@"\n')
-    phpunit.chmod(0o755)
+    # The case's own quality gates: PHPUnit and PHPStan from the runtime, as `composer ci` would call them.
+    for tool in ('phpunit', 'phpstan'):
+        shim = repo / 'vendor/bin' / tool
+        shim.write_text(f'#!/usr/bin/env bash\nexec php {runtime / "vendor/bin" / tool} "$@"\n')
+        shim.chmod(0o755)
 
 
 def test_failures(repo: Path, command: str) -> list[str]:
