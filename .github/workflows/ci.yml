@@ -42,12 +42,14 @@ jobs:
           coverage: none
           tools: composer:v2
       - run: composer install --no-interaction --prefer-dist
-      - name: Prove CI runs against the newest accepted agent-map (>=0.23.0)
+      - name: Prove CI runs against the newest accepted agent-map (>=0.24.0)
         run: |
-          php -r 'require "vendor/autoload.php"; $v = \Composer\InstalledVersions::getPrettyVersion("voku/agent-map"); if ($v === null || version_compare(ltrim($v, "v"), "0.23.0", "<")) { fwrite(STDERR, "Expected installed agent-map >=0.23.0, got " . ($v ?? "unknown") . "\n"); exit(1); } echo "agent-map " . $v . "\n";'
+          php -r 'require "vendor/autoload.php"; $v = \Composer\InstalledVersions::getPrettyVersion("voku/agent-map"); if ($v === null || version_compare(ltrim($v, "v"), "0.24.0", "<")) { fwrite(STDERR, "Expected installed agent-map >=0.24.0, got " . ($v ?? "unknown") . "\n"); exit(1); } echo "agent-map " . $v . "\n";'
       - name: Prove agent-loop is not installed (not even transitively)
         run: |
           test ! -d vendor/voku/agent-loop
           ! composer show 'voku/agent-loop' 2>/dev/null
       - name: Dogfood mutation lifecycle, fail-closed guards and publication rollback
         run: php tools/map-edit-dogfood.php
+      - name: Route benchmark (native vs direct vs map+edit) keeps its published expectations
+        run: php tools/route-benchmark.php --check

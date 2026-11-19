@@ -246,6 +246,33 @@ What is and is not promised:
 | Process killed before the journal is written | Nothing was published. |
 | Power loss or kernel crash | **Not guaranteed.** The journal and pre-images are flushed with `fsync` before they are renamed into place, but directory entries are not synced and filesystems differ in what survives. Treat the working tree as unverified and check it with version control. |
 
+## Route benchmark
+
+`php tools/route-benchmark.php` runs the same tasks through each route a coding agent can take and measures them mechanically; CI runs it with `--check`. The direct and Map routes really run (`agent-edit apply`, `agent-map` plans with PHPStan). The native rows are simulated editors: *native-ideal* makes exactly the right exact-string edits, each `old` text grown by whole lines until it is unique (what an exact-replace tool requires), and *native-naive* takes a plausible shortcut, replacing `->total()` wherever it appears. Every result is compared with a hand-written expected tree and executed.
+
+The fixture has traps: `Cart::total()` is unrelated to `Invoice::total()` and is called on the same line, and a SQL string, an array key and a comment all contain `total`.
+
+| Task | Route | Correct | Unrelated files changed | Bytes read | Bytes authored | Tool calls |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| rename `Invoice::total()` (3 call sites, 3 files) | native-ideal | yes | 0 | 1,637 | 500 | 9 |
+| | native-naive | no (runtime error) | 1 | 68 | 74 | 5 |
+| | map+edit | yes | 0 | 709 | 107 | 3 |
+| change one method body | native-ideal | yes | 0 | 650 | 134 | 2 |
+| | direct (`replace_body`) | yes | 0 | 1,134 | 305 | 2 |
+| remove an unused private method | native-ideal | yes | 0 | 667 | 507 | 5 |
+| | direct (`remove_symbol`) | yes | 0 | 1,136 | 217 | 2 |
+| | map+edit | yes | 0 | 662 | 110 | 3 |
+
+"Bytes read" is what the agent has to take in to do the task: grep output and the files it must inspect, plus the output of every agent-edit and agent-map command it runs. "Bytes authored" is what it has to write: old and new text, the plan JSON, or the planner command line.
+
+What it shows:
+
+- **Cross-file rename: Map + Edit.** About a fifth of the authored bytes, less than half the read bytes and a third of the tool calls of a perfect native editor. A plausible native shortcut also rewrote the unrelated `Cart::total()` calls and broke the code. The benchmark also found that the Map route used to refuse this task, because two `total()` calls share a line; agent-map 0.24.0 keeps such calls apart by their byte range.
+- **Local body change: native editing.** It is cheaper: a direct plan carries JSON overhead and its result output. Use a direct plan here for its guarantees (receipt, `undo`, API guard, read-time digest), not for cost.
+- **Removal: Map + Edit, then direct.** Native editing has to reproduce the whole method as its `old` text. `remove_symbol` names the symbol, and the Map plan also proves that nothing calls the method.
+
+What it does **not** measure: model behaviour. It does not cover the tokens an agent spends deciding, its mistakes and retries, or prompt and instruction overhead. The ideal native editor never errs. These are lower bounds for the mechanical part of each route, not agent productivity. A comparison with real agents (same commits, tasks, models and verification) is still open.
+
 ## Boundaries
 
 `agent-edit` owns plan validation, exact edits/moves, transactional publication, rollback, the mutation lock, observed changed files, receipts and deterministic verification, and the executable capability list.

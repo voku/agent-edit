@@ -6,8 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Changed
+
+- Accept `voku/agent-map` `^0.24.0` as well. CI now requires an installed agent-map >=0.24.0, which indexes `.phtml` templates and keeps same-line calls apart in rename plans; the route benchmark depends on the latter.
+
 ### Added
 
+- Route benchmark (`tools/route-benchmark.php`, run in CI with `--check`): a cross-file method rename, a body change and a method removal, each through every route that fits it (a perfect native exact-string editor, a plausible native shortcut, a direct `source_edit_plan`, an agent-map plan + agent-edit). It reports correctness, unrelated changes, bytes to read, bytes to author and tool calls. For the rename, Map + Edit authors about a fifth of the bytes of a perfect native editor in a third of the tool calls, and the shortcut breaks the code. For a local body change, native editing is cheaper. Results and limits (no model behaviour measured) are in the README. The run found that same-line calls blocked Map rename plans, which agent-map 0.24.0 fixes.
 - Read-time digests for direct edits. A host can require `expected_source_sha256` on every edit of an existing file (`ApplyRequest::$requireSourceHashes`, `--require-source-hash` on `apply`/`edit`, or `AGENT_EDIT_REQUIRE_SOURCE_HASH=1`); an edit without one is refused before anything is resolved or written, with the new failure code `source_hash_required` (`next_action: add_source_hash`). New files are exempt and standalone use is unchanged. The generated instructions tell agents to pass the digest they read, which `agent-map context` already provides as `source_sha256` on every slice.
 - `agent-edit instructions --format=text`: the same six rules and plan commands as the JSON form in about a sixth of the size (2.9 KB instead of 16 KB with all 16 plans), meant for a coding agent's context. The JSON and TOON forms keep the machine-readable capability data for hosts. A test keeps the text form under 3,200 bytes and in sync with the JSON rules and plans; the README records the measured size of each form.
 
