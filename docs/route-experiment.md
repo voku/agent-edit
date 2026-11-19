@@ -141,7 +141,7 @@ The task text followed. All 12 ran in parallel, and no human intervened. Per-run
 | `fixture-rename` | correct, native | correct, native | correct, native |
 | `fixture-remove` | correct, native | correct, native | correct, native |
 | `fixture-body` | correct, native | correct, native | correct, **direct** (`agent-edit edit` + `verify`) |
-| `recall-rename` | correct, native, suite green | correct, native, suite green | correct, native, suite green |
+| `recall-rename` | correct, native, no new test failures | correct, native, no new test failures | correct, native, no new test failures |
 
 | Arm | Correct | Unintended changes | agent-map / agent-edit calls | Mean tokens | Mean tool calls | Mean seconds |
 | --- | --- | --- | --- | ---: | ---: | ---: |
@@ -152,8 +152,8 @@ The task text followed. All 12 ran in parallel, and no human intervened. Per-run
 **What this shows:**
 
 - **Ceiling effect.** All 12 agents produced the correct change and avoided every trap: `Cart::total()` called on
-  the same line, the SQL string, the array key and the comment. All three `recall-rename` runs kept the suite green
-  apart from the one environment failure the baseline already has. No native agent took the replace-everywhere
+  the same line, the SQL string, the array key and the comment. All three `recall-rename` runs left the suite with no failure beyond the baseline's one
+  environment failure, so it still exits nonzero. No native agent took the replace-everywhere
   shortcut that breaks the code in the route benchmark. With this model and these tasks, the tools cannot improve
   correctness, so this run cannot show an effectiveness gain in either direction.
 - **Unprompted, the tools go unused (B: 0/4).** One B agent noticed `tools/route-tools` and still edited by hand.

@@ -18,6 +18,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -58,7 +59,10 @@ def materialize(case: dict, repo: Path, source: Path | None) -> None:
         # Every tracked file, including export-ignored tests and PHPUnit config (git archive would drop them), through
         # a temporary index so the source clone's own index and work tree stay untouched.
         with tempfile.TemporaryDirectory() as scratch:
-            env = {**os.environ, 'GIT_INDEX_FILE': str(Path(scratch) / 'index')}
+            # Inherited repository-location variables would override -C and point git at another repository.
+            scrub = {'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_COMMON_DIR', 'GIT_NAMESPACE'}
+            env = {key: value for key, value in os.environ.items() if key not in scrub}
+            env['GIT_INDEX_FILE'] = str(Path(scratch) / 'index')
             subprocess.run(['git', '-C', str(source), 'read-tree', case['source']['commit']], env=env, check=True)
             subprocess.run(['git', '-C', str(source), 'checkout-index', '-a', f'--prefix={repo}/'], env=env, check=True)
     else:
@@ -132,9 +136,16 @@ def vendor_shim(repo: Path, runtime: Path, extra_psr4: list[str]) -> None:
 
 
 def test_failures(repo: Path, command: str) -> list[str]:
-    """Names of the failing tests of a suite run (PHPUnit text output)."""
-    output = subprocess.run(command, cwd=repo, shell=True, capture_output=True, text=True).stdout
-    return sorted({line.split(') ', 1)[1].split(' with data set')[0].strip() for line in output.splitlines() if line[:1].isdigit() and ') ' in line[:6]})
+    """Names of the failing tests of the baseline suite run. Preparation fails when the suite did not complete
+    (no PHPUnit summary), so a crashed baseline cannot be recorded as "no failures"."""
+    run_result = subprocess.run(command, cwd=repo, shell=True, capture_output=True, text=True)
+    output = run_result.stdout
+    if re.search(r'^(OK \(|OK, but|Tests: )', output, re.M) is None:
+        sys.exit(f'baseline suite did not complete (exit {run_result.returncode}):\n{output[-1500:]}\n{run_result.stderr[-1500:]}')
+    failures = sorted({line.split(') ', 1)[1].split(' with data set')[0].strip() for line in output.splitlines() if line[:1].isdigit() and ') ' in line[:6]})
+    if run_result.returncode != 0 and not failures:
+        sys.exit(f'baseline suite exited {run_result.returncode} without a parsed failure')
+    return failures
 
 
 def guidance(tools: dict, repo: Path) -> str:

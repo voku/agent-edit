@@ -95,9 +95,12 @@ def logged_route(log: Path, changed: list[str]) -> dict | None:
     if not log.exists():
         return None
     calls = [line.split('\t') for line in log.read_text().splitlines() if line.count('\t') >= 2]
-    map_plans = sum(1 for c in calls if c[1] == 'agent-map' and re.match(r'\s*\S*-plan\b', c[2]))
-    edit_mutations = sum(1 for c in calls if c[1] == 'agent-edit' and re.match(r'\s*(apply|edit|recover)\b', c[2]) and '--dry-run' not in c[2])
-    route = 'map+edit' if map_plans and edit_mutations else 'direct' if edit_mutations else 'native' if changed else 'none'
+    # Every agent-map planner subcommand ends in `-plan` (rename-plan, method-removal-plan, ...).
+    plan_at = [i for i, c in enumerate(calls) if c[1] == 'agent-map' and re.match(r'\s*\S*-plan\b', c[2])]
+    mutation_at = [i for i, c in enumerate(calls) if c[1] == 'agent-edit' and re.match(r'\s*(apply|edit|recover)\b', c[2]) and '--dry-run' not in c[2]]
+    # map+edit only when a mutation follows a planner call; a plan built after the edit did not drive it.
+    planned = bool(plan_at) and any(i > plan_at[0] for i in mutation_at)
+    route = 'map+edit' if planned else 'direct' if mutation_at else 'native' if changed else 'none'
     return {
         'chosen_route': route,
         'route_tool_calls': {
@@ -106,6 +109,11 @@ def logged_route(log: Path, changed: list[str]) -> dict | None:
         },
         'route_log': [c[1] + ' ' + c[2] for c in calls],
     }
+
+
+def suite_completed(output: str) -> bool:
+    """PHPUnit printed its final summary: `OK (...)` for a clean run, a `Tests: ...` line otherwise."""
+    return re.search(r'^(OK \(|OK, but|Tests: )', output, re.M) is not None
 
 
 def test_failures(output: str) -> list[str]:
@@ -148,7 +156,9 @@ def main() -> None:
             failures = test_failures(run.stdout)
             baseline = manifest.get('baseline_test_failures')
             # Tests that already fail on the untouched baseline (environment) do not count against the agent.
-            passed = run.returncode == 0 if baseline is None else set(failures) <= set(baseline) and 'Tests:' in run.stdout
+            # A nonzero exit must be explained by parsed failures; a crash after the summary is not a pass.
+            passed = run.returncode == 0 if baseline is None else (
+                suite_completed(run.stdout) and set(failures) <= set(baseline) and (run.returncode == 0 or bool(failures)))
             tests = {'exit_code': run.returncode, 'failures': failures, 'baseline_failures': baseline, 'passed': passed, 'tail': run.stdout[-800:]}
             verdict['correct'] = bool(verdict.get('correct')) and passed
 
