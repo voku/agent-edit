@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## 0.8.0 - 2026-11-19
+
 ### Changed
 
 - Accept `voku/agent-map` `^0.24.0` as well. CI now requires an installed agent-map >=0.24.0, which indexes `.phtml` templates and keeps same-line calls apart in rename plans; the route benchmark depends on the latter.
