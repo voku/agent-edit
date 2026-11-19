@@ -30,14 +30,25 @@ final class SignatureGuard
     private const MODIFIERS = [T_PUBLIC, T_PROTECTED, T_PRIVATE, T_STATIC, T_ABSTRACT, T_FINAL, T_READONLY];
 
     /**
-     * @return list<string> human-readable API changes between the two sources; empty when none or when either side does not parse
+     * @return list<string> human-readable API changes between the two sources; empty when none or when either side does
+     *                      not parse. Use {@see compare()} where "could not compare" must not read as "no change".
      */
     public function changes(string $before, string $after): array
+    {
+        return $this->compare($before, $after)->changes;
+    }
+
+    /** Three-state verdict: an unparsable side yields `unknown`, never `unchanged`. */
+    public function compare(string $before, string $after): SignatureComparison
     {
         $old = $this->declarations($before);
         $new = $this->declarations($after);
         if ($old === null || $new === null) {
-            return [];
+            return SignatureComparison::unknown(match (true) {
+                $old === null && $new === null => 'neither the original nor the edited source parses',
+                $old === null => 'the original source does not parse',
+                default => 'the edited source does not parse',
+            });
         }
 
         $changes = [];
@@ -51,7 +62,7 @@ final class SignatureGuard
             }
         }
 
-        return $changes;
+        return SignatureComparison::of($changes);
     }
 
     /** @return array<string, string>|null declaration key => normalized signature */

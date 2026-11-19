@@ -162,7 +162,15 @@ final readonly class SourceEditPlanApplier implements MaplessPlanApplier
                 // Before the API guard (which cannot judge unparsable code) and before any staging, so a dry run
                 // reports a broken result with its line instead of `prepared`.
                 $this->assertParses($after, $this->relative($realRoot, $path));
-                $changes = $guard->changes($before, $after);
+                $comparison = $guard->compare($before, $after);
+                if ($comparison->isUnknown()) {
+                    // Typically a syntax repair: the original cannot be compared, so the edit may hide an API change.
+                    if (!$plan->allowSignatureChange) {
+                        throw new EditFailure($this->unknownApiRefusal($this->relative($realRoot, $path), (string) $comparison->reason), FailureCode::ApiChangeRefused, ['path' => $this->relative($realRoot, $path), 'api_check' => SignatureComparison::UNKNOWN]);
+                    }
+                    $acknowledged[] = $this->relative($realRoot, $path) . ': API comparison unavailable (' . $comparison->reason . ')';
+                }
+                $changes = $comparison->changes;
                 if ($changes !== []) {
                     if (!$plan->allowSignatureChange) {
                         throw new EditFailure($this->apiChangeRefusal($this->relative($realRoot, $path), $changes), FailureCode::ApiChangeRefused, ['path' => $this->relative($realRoot, $path), 'changes' => $changes]);
@@ -222,6 +230,15 @@ final readonly class SourceEditPlanApplier implements MaplessPlanApplier
             $path,
             implode('; ', $listed),
             $more,
+        );
+    }
+
+    private function unknownApiRefusal(string $path, string $reason): string
+    {
+        return sprintf(
+            'The API of %s cannot be compared because %s, so the edit may change an API other files call without anyone noticing. For a syntax repair, keep the plan to the repair and set "allow_signature_change": true after checking that no public signature is removed or changed; the receipt records that the comparison was unavailable.',
+            $path,
+            $reason,
         );
     }
 
