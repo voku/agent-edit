@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Read-time digests for direct edits. A host can require `expected_source_sha256` on every edit of an existing file (`ApplyRequest::$requireSourceHashes`, `--require-source-hash` on `apply`/`edit`, or `AGENT_EDIT_REQUIRE_SOURCE_HASH=1`); an edit without one is refused before anything is resolved or written, with the new failure code `source_hash_required` (`next_action: add_source_hash`). New files are exempt and standalone use is unchanged. The generated instructions tell agents to pass the digest they read, which `agent-map context` already provides as `source_sha256` on every slice.
 - `agent-edit instructions --format=text`: the same six rules and plan commands as the JSON form in about a sixth of the size (2.9 KB instead of 16 KB with all 16 plans), meant for a coding agent's context. The JSON and TOON forms keep the machine-readable capability data for hosts. A test keeps the text form under 3,200 bytes and in sync with the JSON rules and plans; the README records the measured size of each form.
 
 ## 0.7.0 - 2026-11-19

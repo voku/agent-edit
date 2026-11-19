@@ -335,6 +335,9 @@ final readonly class EditEngine
         $failure = null;
         $preview = ['changes' => [], 'diff' => ''];
         $receiptTemplate = $this->receiptTemplate($request, $plan, $planRaw, $capability, null, null);
+        if ($request->requireSourceHashes) {
+            self::assertSourceHashes(SourceEditPlanDocument::fromArray($plan));
+        }
 
         if ($request->dryRun) {
             $before = $snapshotter->capture($request->repositoryRoot);
@@ -1000,6 +1003,27 @@ final readonly class EditEngine
                 PublicationJournal::FILE,
                 $bundle,
             ), FailureCode::RecoveryRequired, ['bundle' => $bundle]);
+        }
+    }
+
+    /**
+     * Host policy (`ApplyRequest::$requireSourceHashes`): every edit of an existing file must name the digest of the
+     * bytes the caller based it on. New files have no prior bytes and are exempt. Checked before anything is resolved,
+     * written or authorized.
+     */
+    private static function assertSourceHashes(SourceEditPlanDocument $document): void
+    {
+        $missing = [];
+        foreach ($document->edits as $position => $edit) {
+            if ($edit->expectedSourceSha256 === null) {
+                $missing[] = ['edit' => $position, 'path' => $edit->path];
+            }
+        }
+        if ($missing !== []) {
+            throw new EditFailure(sprintf(
+                'This host requires expected_source_sha256 on every direct edit; missing on %s. Use the source_sha256 of the agent-map context slice you read, or the SHA-256 of the file as you read it.',
+                implode(', ', array_map(static fn (array $entry): string => sprintf('edits[%d] (%s)', $entry['edit'], $entry['path']), $missing)),
+            ), FailureCode::SourceHashRequired, ['missing' => $missing]);
         }
     }
 

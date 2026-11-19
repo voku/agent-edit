@@ -20,6 +20,7 @@ enum FailureCode: string
     case MapBackendUnsupported = 'map_backend_unsupported';
     case AnchorMissing = 'anchor_missing';
     case AnchorAmbiguous = 'anchor_ambiguous';
+    case SourceHashRequired = 'source_hash_required';
     case EditsOverlap = 'edits_overlap';
     case ApiChangeRefused = 'api_change_refused';
     case TargetExists = 'target_exists';
@@ -27,7 +28,7 @@ enum FailureCode: string
     case RecoveryRequired = 'recovery_required';
     case Failed = 'failed';
 
-    /** @return 'fix_arguments'|'provide_input'|'replan'|'refresh_map_and_replan'|'rebuild_map_with_phpstan'|'reread_and_retry'|'disambiguate_anchor'|'merge_edits'|'use_map_plan_or_acknowledge'|'edit_existing_file'|'inspect_working_tree'|'recover_bundle'|'report' */
+    /** @return 'fix_arguments'|'provide_input'|'replan'|'refresh_map_and_replan'|'rebuild_map_with_phpstan'|'reread_and_retry'|'disambiguate_anchor'|'add_source_hash'|'merge_edits'|'use_map_plan_or_acknowledge'|'edit_existing_file'|'inspect_working_tree'|'recover_bundle'|'report' */
     public function nextAction(): string
     {
         return match ($this) {
@@ -38,6 +39,7 @@ enum FailureCode: string
             self::MapBackendUnsupported => 'rebuild_map_with_phpstan',
             self::AnchorMissing => 'reread_and_retry',
             self::AnchorAmbiguous => 'disambiguate_anchor',
+            self::SourceHashRequired => 'add_source_hash',
             self::EditsOverlap => 'merge_edits',
             self::ApiChangeRefused => 'use_map_plan_or_acknowledge',
             self::TargetExists => 'edit_existing_file',
@@ -60,6 +62,7 @@ enum FailureCode: string
             self::MapBackendUnsupported => 'Nothing was changed. This plan needs a Map built with PHPStan (`agent-map build --backend=phpstan`, which needs phpstan/phpstan installed); rebuild it, produce the plan again and re-run.',
             self::AnchorMissing => 'Nothing was changed. The text to replace is not in the file as given, or the file changed since it was read; re-read the file, copy the exact current text and retry.',
             self::AnchorAmbiguous => 'Nothing was changed. `find` matches more than once; extend it with surrounding text, or pass `occurrence` (1-based) or `all`.',
+            self::SourceHashRequired => 'Nothing was changed. This host requires every direct edit to name the file digest it was based on: set expected_source_sha256 (`agent-edit edit --sha256`) to the `source_sha256` of the agent-map context slice you read, or to the SHA-256 of the file as you read it.',
             self::EditsOverlap => 'Nothing was changed. Two edits touch the same text; merge them into one edit or anchor them on disjoint text.',
             self::ApiChangeRefused => 'Nothing was changed. The edit removes or changes a class, function or non-private method signature; use the matching agent-map plan, or set allow_signature_change after checking the callers yourself.',
             self::TargetExists => 'Nothing was changed. A file to create already exists; change it with an edit or pick another path.',

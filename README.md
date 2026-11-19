@@ -63,6 +63,7 @@ vendor/bin/agent-edit schema                                           # JSON Sc
 What agent-edit proves before anything is written (`--dry-run` stops here):
 
 - **Anchors.** `find` must occur exactly once (or be picked with `occurrence`, or replaced everywhere with `all`). A refusal says what to do next: the line numbers of an ambiguous match, the line where the same text exists with different whitespace or line endings, or the closest line when the text differs. A multi-line `find` written with `\n` also matches a file whose line breaks are all `\r\n` (the text is matched and written in the file's own line ending; uniqueness, `occurrence` and `all` apply as usual), but a file that mixes both is not converted (text that occurs there exactly as written still matches). Optional `expected_source_sha256` refuses a file that changed since it was read.
+- **Read-time digests.** The transaction always protects the bytes agent-edit itself read while preparing the edit. Only `expected_source_sha256` also protects the bytes the agent based its decision on: without it, an edit whose anchor still matches lands on a file that changed in between. An agent that read the code through `agent-map context` already holds that digest: every source slice carries `source_sha256` in exactly this format, so copying it costs nothing. A governed host can require it: `ApplyRequest::$requireSourceHashes`, `--require-source-hash` on `apply` and `edit`, or `AGENT_EDIT_REQUIRE_SOURCE_HASH=1` in the agent's environment refuse any edit of an existing file without a digest (`source_hash_required`, `next_action: add_source_hash`), before anything is resolved or written. New files are exempt. Standalone use stays optional.
 - **Syntax.** Every rewritten `.php` file is parsed before anything is staged, so a dry run already refuses a broken result and names its line; every rewritten or created `.php` file is then staged and `php -l` checked; publication is all-or-nothing and every file is restored on any failure.
 - **API changes need caller evidence.** A guard compares the declarations before and after. Removing or renaming a class, function, non-private method, non-private class constant, enum case or non-private property, or changing a signature (parameters, types, defaults, visibility) or the shape of a constant or property (visibility, PHP 8.4 setter visibility, `static`, `readonly`, `final`, declared type; the backing value of an enum case), is refused with a pointer to the matching `agent-map` plan. After checking the callers by other means, `"allow_signature_change": true` (`--allow-signature-change`) applies it and records the acknowledged changes in the receipt. Bodies, private members, constant and property values and additions are never reported.
 - **Scope.** Unknown keys, absolute or `..` paths, `.git/` and `.agent-edit/` targets, binary files, symlinks and paths that leave the project root are refused.
@@ -122,6 +123,7 @@ A failure looks like this, and `error.code` is stable:
 | `evidence_stale`, `evidence_changed` | the Map or the source moved since the plan was made | `refresh_map_and_replan` |
 | `map_backend_unsupported` | the plan needs a PHPStan-backed Map | `rebuild_map_with_phpstan` |
 | `anchor_missing`, `anchor_ambiguous`, `edits_overlap` | a direct edit's text is absent, matches twice, or two edits touch the same text | `reread_and_retry`, `disambiguate_anchor`, `merge_edits` |
+| `source_hash_required` | the host requires `expected_source_sha256` and a direct edit has none | `add_source_hash` |
 | `api_change_refused` | a direct edit would change a public declaration | `use_map_plan_or_acknowledge` |
 | `target_exists` | a file to create already exists | `edit_existing_file` |
 | `apply_failed`, `failed` | rolled back / not classified | `inspect_working_tree`, `report` |
@@ -142,15 +144,15 @@ The second command intersects what Map can *plan* with what agent-edit can *exec
 
 `instructions` emits a short operating procedure and the plan commands from the same executable capability registry. Without `--with-map`, it labels the registry as an upper bound; piping current Map capabilities through `--with-map=-` resolves the exact installed intersection. Hosts can include this output in a coding agent's context instead of maintaining a second, drifting list of executable refactors.
 
-Put `--format=text` into a coding agent's context. The JSON and TOON forms add machine-readable capability data for hosts (each plan twice: the agent-facing description and the registry record), which an agent does not need. Measured for 0.7.0 with all 16 plans:
+Put `--format=text` into a coding agent's context. The JSON and TOON forms add machine-readable capability data for hosts (each plan twice: the agent-facing description and the registry record), which an agent does not need. Measured with all 16 plans:
 
 | Form | Bytes | Approx. tokens (bytes / 4) |
 | --- | ---: | ---: |
-| `--format=text` | 2,854 | ~710 |
-| `--format=toon` | 10,237 | ~2,560 |
-| `--format=json` | 16,029 | ~4,010 |
+| `--format=text` | 2,946 | ~740 |
+| `--format=toon` | 10,331 | ~2,580 |
+| `--format=json` | 16,121 | ~4,030 |
 
-The six rules themselves are about 1,570 bytes in every form. `CapabilitiesTest` keeps the text form under 3,200 bytes and checks that it carries every rule and plan command of the JSON form. This measures cost only, not whether the rules change what an agent does.
+The six rules themselves are about 1,620 bytes in every form. `CapabilitiesTest` keeps the text form under 3,200 bytes and checks that it carries every rule and plan command of the JSON form. This measures cost only, not whether the rules change what an agent does.
 
 The guidance keeps the boundary explicit: Map proposes a versioned plan, agent-edit validates and applies only that plan, and the host handles arbitrary behavioral edits and their semantic review. It does not add model calls or make agent-edit a free-form editor.
 

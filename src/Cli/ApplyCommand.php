@@ -55,6 +55,7 @@ final readonly class ApplyCommand
                 label: $request['task_id'],
                 dryRun: $request['dry_run'],
                 authorizeMutation: $this->authorizeMutation,
+                requireSourceHashes: $request['require_source_hashes'],
             ));
 
             $direct = $receipt->planType === SourceEditPlanDocument::TYPE;
@@ -162,6 +163,7 @@ final readonly class ApplyCommand
      *     output_directory: string,
      *     dry_run: bool,
      *     show_diff: bool,
+     *     require_source_hashes: bool,
      *     format: 'text'|'json',
      *     staged: array{plan: string, created: list<string>}|null
      * }
@@ -178,6 +180,8 @@ final readonly class ApplyCommand
         $values = [];
         $dryRun = false;
         $showDiff = false;
+        // A host can make the policy the default for every agent invocation; the flag cannot switch it off.
+        $requireSourceHashes = in_array(strtolower((string) getenv('AGENT_EDIT_REQUIRE_SOURCE_HASH')), ['1', 'true', 'yes'], true);
         $plan = null;
         for ($index = 0, $count = count($tokens); $index < $count; ++$index) {
             $token = $tokens[$index];
@@ -187,6 +191,10 @@ final readonly class ApplyCommand
             }
             if ($token === '--diff') {
                 $showDiff = true;
+                continue;
+            }
+            if ($token === '--require-source-hash') {
+                $requireSourceHashes = true;
                 continue;
             }
             if (!str_starts_with($token, '--')) {
@@ -201,7 +209,7 @@ final readonly class ApplyCommand
             $name = str_contains($raw, '=') ? explode('=', $raw, 2)[0] : $raw;
             if (!in_array($name, ['task', 'map-index', 'map-root', 'output-dir', 'format'], true)) {
                 throw new InvalidInputFailure(
-                    'Unknown option --' . $name . ' for `agent-edit apply` (accepted: --task, --map-index, --map-root, --output-dir, --dry-run, --diff, --format).'
+                    'Unknown option --' . $name . ' for `agent-edit apply` (accepted: --task, --map-index, --map-root, --output-dir, --dry-run, --diff, --require-source-hash, --format).'
                     . ($name === 'allow-signature-change' ? ' To acknowledge an API change set "allow_signature_change": true in the plan (`agent-edit edit` has the flag).' : ''),
                     FailureCode::Usage,
                 );
@@ -292,6 +300,7 @@ final readonly class ApplyCommand
             'output_directory' => $output,
             'dry_run' => $dryRun,
             'show_diff' => $showDiff,
+            'require_source_hashes' => $requireSourceHashes,
             'format' => $format,
             'staged' => $staged,
         ];
@@ -440,6 +449,8 @@ Options:
   --output-dir PATH    Receipt bundle. Default: .agent-edit/receipts/<label>
   --dry-run            Validate the complete plan and current source without mutation; lists the files it would change.
   --diff               With --dry-run: also print the unified diff of every change it would make.
+  --require-source-hash  source_edit_plan only: refuse edits without expected_source_sha256 (also enabled by
+                       AGENT_EDIT_REQUIRE_SOURCE_HASH=1, which a host sets for every agent invocation).
   --format=text|json   json prints exactly one document on stdout, also for a failure (error.code, error.next_action,
                        error.hint, error.details). Exit codes are the same in both formats.
 

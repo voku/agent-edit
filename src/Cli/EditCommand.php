@@ -85,9 +85,9 @@ final readonly class EditCommand
         $passThrough = [];
         for ($index = 0, $count = count($tokens); $index < $count; ++$index) {
             $token = $tokens[$index];
-            if (in_array($token, ['--all', '--allow-signature-change', '--dry-run', '--diff'], true)) {
+            if (in_array($token, ['--all', '--allow-signature-change', '--dry-run', '--diff', '--require-source-hash'], true)) {
                 $flags[$token] = true;
-                if ($token === '--dry-run' || $token === '--diff') {
+                if ($token === '--dry-run' || $token === '--diff' || $token === '--require-source-hash') {
                     $passThrough[] = $token;
                 }
                 continue;
@@ -205,7 +205,9 @@ transactional, and a receipt with pre-images is written so `agent-edit undo` can
 Options:
   --occurrence N            Replace the Nth (1-based) match when --find occurs more than once.
   --all                     Replace every match (at least one must exist).
-  --sha256 DIGEST           Refuse unless the file still has this SHA-256.
+  --sha256 DIGEST           Refuse unless the file still has this SHA-256 (the source_sha256 of an agent-map
+                            context slice, or the digest of the file as you read it).
+  --require-source-hash     Refuse without --sha256 (also enabled by AGENT_EDIT_REQUIRE_SOURCE_HASH=1).
   --allow-signature-change  Acknowledge that callers of a changed/removed class, function or non-private method
                             were checked. Without it such edits are refused: use an agent-map plan instead.
   --target LABEL            Plan target label. Default: edit:<FILE>.
