@@ -1,0 +1,1 @@
+Rename the interface method `voku\AgentRecallCompiler\Provider\RecallProvider::collect()` to `gather()`, together with every implementation of it, and update every call of it in `src/` and `tests/`. Behaviour must not change; keep the test suite passing.

@@ -4,13 +4,14 @@
     python3 tools/route-experiment/calibrate.py --work DIR [--recall-source DIR] [--with-tests]
 
 For every case it prepares arm A and grades simulated outcomes: the untouched workspace must be incorrect, the
-reference solution correct, and the reference plus a stray file must report one unintended path. For the fixture
-rename, the plausible native shortcut (replace `->total()` everywhere) must be incorrect and report the unrelated
-`src/Cart.php` as unintended. Exit 1 on any
+reference solution correct, and the reference plus a stray file must report one unintended path. For the two
+adversarial renames, the plausible native shortcut (replace every call and declaration of the old name) must be
+incorrect and report the unrelated classes as unintended. Exit 1 on any
 deviation. Cases whose source is missing are reported as skipped, never as passed.
 """
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -42,14 +43,30 @@ def reference(case: str, repo: Path) -> None:
     elif case == 'recall-rename':
         for path in ['src/SelectionResult.php', 'src/MetaJsonRenderer.php', 'src/OutcomeDraftRenderer.php', 'src/SystemBriefingRenderer.php', 'src/ValidationPlanRenderer.php']:
             replace(repo, path, 'toRecallResult', 'asRecallResult', 0)
+    elif case == 'hierarchy-rename':
+        subprocess.run(['python3', str(KIT / 'fixtures/hierarchy_rename.py'), str(repo), 'expected'], check=True)
+    elif case == 'recall-collect-rename':
+        for path in sorted(p for d in ('src', 'tests') for p in (repo / d).rglob('*.php')):
+            text = path.read_text()
+            if re.search(r'\bcollect\b', text):
+                path.write_text(re.sub(r'\bcollect\b', 'gather', text))
     else:
         sys.exit(f'no reference for {case}')
 
 
-def shortcut(repo: Path) -> None:
-    for path in sorted((repo / 'src').glob('*.php')):
-        path.write_text(path.read_text().replace('->total()', '->grandTotal()'))
-    replace(repo, 'src/Invoice.php', 'public function total()', 'public function grandTotal()')
+# The plausible native shortcut per case: replace every call and declaration of the old name, whatever the receiver.
+SHORTCUTS = {
+    'fixture-rename': ['src/Cart.php'],
+    'hierarchy-rename': ['src/Promo/Coupon.php', 'src/Promo/GiftCard.php'],
+}
+
+
+def shortcut(case: str, repo: Path) -> None:
+    old, new = ('total', 'grandTotal') if case == 'fixture-rename' else ('amount', 'price')
+    for path in sorted((repo / 'src').rglob('*.php')):
+        text = path.read_text()
+        text = re.sub(r'(->|::)' + old + r'\(', r'\1' + new + '(', text)
+        path.write_text(re.sub(r'function ' + old + r'\(', 'function ' + new + '(', text))
 
 
 def grade(out: Path, with_tests: bool) -> dict:
@@ -74,7 +91,7 @@ def main() -> None:
                 report.append({'case': case['id'], 'skipped': 'no --recall-source'})
                 continue
             source = args.recall_source
-        outcomes = {'untouched': False, 'reference': True, 'reference+stray': True} | ({'native-shortcut': False} if case['id'] == 'fixture-rename' else {})
+        outcomes = {'untouched': False, 'reference': True, 'reference+stray': True} | ({'native-shortcut': False} if case['id'] in SHORTCUTS else {})
         for outcome, want_correct in outcomes.items():
             out = work / f"{case['id']}-{outcome}"
             prepare = ['python3', str(KIT / 'prepare.py'), '--case', case['id'], '--arm', 'A', '--out', str(out)]
@@ -85,11 +102,11 @@ def main() -> None:
             if outcome.startswith('reference'):
                 reference(case['id'], repo)
             if outcome == 'native-shortcut':
-                shortcut(repo)
+                shortcut(case['id'], repo)
             if outcome == 'reference+stray':
                 (repo / 'NOTES.md').write_text('stray\n')
             row = grade(out, args.with_tests)
-            want_unintended = {'reference+stray': ['NOTES.md'], 'native-shortcut': ['src/Cart.php']}.get(outcome, [])
+            want_unintended = {'reference+stray': ['NOTES.md'], 'native-shortcut': SHORTCUTS.get(case['id'], [])}.get(outcome, [])
             ok = row['correct'] is want_correct and row['unintended_paths'] == want_unintended
             report.append({'case': case['id'], 'outcome': outcome, 'correct': row['correct'], 'unintended_paths': row['unintended_paths'], 'ok': ok})
             if not ok:
