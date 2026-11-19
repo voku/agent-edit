@@ -73,7 +73,7 @@ final readonly class InstructionsCommand
                 'agent-edit accepts two explicit routes: a versioned agent-map plan for identity-changing refactors requiring caller evidence, or a caller-authored source_edit_plan for bounded local edits. Neither plan grants mutation approval.',
                 'Map plans require matching plan_type and contract_version from the installed Map/Edit capability intersection (--with-map); registry_only is only an upper bound. Respect requires_phpstan and refuse blocked, review_required, stale or ambiguous evidence.',
                 'Apply a Map plan only after agent-edit apply PLAN --dry-run accepts it; then refresh the Map and run agent-edit verify --bundle=BUNDLE. Never rewrite plan evidence to bypass a refusal.',
-                'Direct edits use agent-edit edit FILE --find TEXT --replace TEXT or a source_edit_plan on stdin; agent-edit schema documents the contract. Anchors must resolve unambiguously; PHP symbol operations are defined there. Public signature changes require explicit allow_signature_change only after the caller has checked affected consumers.',
+                'Direct edits use agent-edit edit FILE --find TEXT --replace TEXT or a source_edit_plan on stdin; agent-edit schema documents the contract. Anchors must resolve unambiguously; PHP symbol operations are defined there. Pass the file digest you read as expected_source_sha256 (agent-map context: source_sha256). Public signature changes require explicit allow_signature_change only after the caller has checked affected consumers.',
                 'Failures expose error.code and next_action; a refused plan must not be retried unchanged. recovery_required means an interrupted publication: run agent-edit recover --bundle=BUNDLE, never re-apply. agent-edit undo is digest-guarded and refuses to overwrite later source changes.',
                 'Verification proves structural postconditions, not behavior or authorization. The host owns approval, tests, static analysis and review. Unsupported changes belong to the normal coding and review workflow, not an invented agent-edit capability.',
             ],
@@ -81,13 +81,18 @@ final readonly class InstructionsCommand
             'capability_data' => $capabilityData,
         ];
 
+        if ($format === 'text') {
+            echo $this->text($payload['instructions'], $plans, $resolved);
+
+            return 0;
+        }
         if ($format === 'toon') {
             echo Toon::encode($payload) . "\n";
 
             return 0;
         }
         if ($format !== 'json') {
-            fwrite(STDERR, "[ERROR] --format must be json or toon.\n");
+            fwrite(STDERR, "[ERROR] --format must be json, toon or text.\n");
 
             return 2;
         }
@@ -95,6 +100,36 @@ final readonly class InstructionsCommand
         echo json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n";
 
         return 0;
+    }
+
+    /**
+     * The prompt-ready form: the same rules and plan commands as the JSON payload, without the machine-readable
+     * capability data a host needs but a coding agent does not. It is about a tenth of the JSON size.
+     *
+     * @param list<string> $rules
+     * @param list<array<string, mixed>> $plans
+     */
+    private function text(array $rules, array $plans, bool $resolved): string
+    {
+        $lines = ['agent-edit rules:'];
+        foreach ($rules as $index => $rule) {
+            $lines[] = ($index + 1) . '. ' . $rule;
+        }
+        $lines[] = '';
+        $lines[] = $resolved
+            ? 'Executable plans (installed Map/Edit intersection):'
+            : 'Plans (registry upper bound; pass --with-map for the installed intersection):';
+        foreach ($plans as $plan) {
+            $versions = is_array($plan['contract_versions'] ?? null) ? implode('|', array_map('strval', $plan['contract_versions'])) : '';
+            $source = is_string($plan['agent_map_command'] ?? null) ? $plan['agent_map_command'] : 'caller-authored: ' . implode(', ', is_array($plan['commands'] ?? null) ? array_map('strval', $plan['commands']) : []);
+            $flags = array_keys(array_filter([
+                'requires PHPStan' => ($plan['requires_phpstan'] ?? false) === true,
+                'moves files' => ($plan['moves_files'] ?? false) === true,
+            ]));
+            $lines[] = '- ' . (string) ($plan['plan_type'] ?? '') . ' ' . $versions . ': ' . $source . ($flags === [] ? '' : ' (' . implode(', ', $flags) . ')');
+        }
+
+        return implode("\n", $lines) . "\n";
     }
 
     /** @return array<mixed> */
