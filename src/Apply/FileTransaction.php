@@ -86,7 +86,8 @@ final readonly class FileTransaction
                 }
                 $temporary = $this->temporaryPath($operation->path, 'stage');
                 $staged[$operation->path] = $temporary;
-                $permissions = $operation->isCreate() ? 0o644 : fileperms($operation->path);
+                // An explicit mode (a recovery restore) always wins: the file's current mode may have been widened since.
+                $permissions = $operation->mode ?? ($operation->isCreate() ? 0o644 : fileperms($operation->path));
                 $handle = is_int($permissions) ? $this->createRestricted($temporary, $permissions) : null;
                 if ($handle === null) {
                     throw new RuntimeException('Unable to set staged file permissions: ' . $operation->path);
@@ -371,7 +372,14 @@ final readonly class FileTransaction
      */
     private function createRestricted(string $path, int $permissions)
     {
-        $handle = @fopen($path, 'xb');
+        // Created private first (umask 0077), then given its final bits before any byte is written: a staged copy of a
+        // private source is never readable by others, not even between creation and chmod.
+        $previousUmask = umask(0o077);
+        try {
+            $handle = @fopen($path, 'xb');
+        } finally {
+            umask($previousUmask);
+        }
         if (!is_resource($handle)) {
             return null;
         }

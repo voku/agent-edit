@@ -36,7 +36,17 @@ final readonly class SourceEditPlanApplier implements MaplessPlanApplier
     /** @param array<string, mixed> $plan */
     public function preflight(array $plan, string $root): array
     {
-        $prepared = $this->prepare(SourceEditPlanDocument::fromArray($plan), $root);
+        return $this->preflightOf($this->prepare(SourceEditPlanDocument::fromArray($plan), $root), $root);
+    }
+
+    /**
+     * The preflight document of an existing preparation, so a caller that journals a publication describes exactly
+     * the preparation that {@see applyPrepared()} then publishes.
+     *
+     * @return array{files: array<string, string>, final_paths: array<string, string>, source_hashes: array<string, string>, plan_type: string, edit_count: int, move_count: int, creation_count: int}
+     */
+    public function preflightOf(SourceEditPreparation $prepared, string $root): array
+    {
         $files = [];
         $hashes = [];
         foreach ($prepared->files as $file) {
@@ -63,7 +73,15 @@ final readonly class SourceEditPlanApplier implements MaplessPlanApplier
     /** @param array<string, mixed> $plan */
     public function apply(array $plan, string $root): EditResult
     {
-        $prepared = $this->prepare(SourceEditPlanDocument::fromArray($plan), $root);
+        return $this->applyPrepared($this->prepare(SourceEditPlanDocument::fromArray($plan), $root), $root);
+    }
+
+    /**
+     * Publishes one preparation as is. The transaction re-proves every file still has the digest the preparation read,
+     * so bytes changed since then (by anyone) make it roll back instead of publishing a different edit.
+     */
+    public function applyPrepared(SourceEditPreparation $prepared, string $root): EditResult
+    {
         $warnings = $this->transaction->run($prepared->operations, $root);
 
         $evidence = [];

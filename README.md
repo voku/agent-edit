@@ -56,6 +56,7 @@ vendor/bin/agent-edit apply - <<'JSON'                                          
 JSON
 vendor/bin/agent-edit verify --bundle=.agent-edit/receipts/<label>     # no Map needed
 vendor/bin/agent-edit undo   --bundle=.agent-edit/receipts/<label>     # restore the recorded pre-images
+vendor/bin/agent-edit recover --bundle=.agent-edit/receipts/<label>    # finish an interrupted publication (see below)
 vendor/bin/agent-edit schema                                           # JSON Schema of the plan
 ```
 
@@ -124,6 +125,7 @@ A failure looks like this, and `error.code` is stable:
 | `api_change_refused` | a direct edit would change a public declaration | `use_map_plan_or_acknowledge` |
 | `target_exists` | a file to create already exists | `edit_existing_file` |
 | `apply_failed`, `failed` | rolled back / not classified | `inspect_working_tree`, `report` |
+| `recovery_required` | sources were published but the receipt is missing, or the bundle has a pending publication journal | `recover_bundle` |
 
 `next_action` names the only recovery that is legal for that cause; it carries no authority, a caller still decides. A cause that is not classified is reported as `failed`/`report`, never guessed from the message. A dry run still writes a `prepared` receipt bundle (so a host can see the attempt); it never writes source, and its diff is printed, not persisted.
 
@@ -168,6 +170,7 @@ $receipt = $engine->applyWithReceipt(new ApplyRequest(
 
 $result = $engine->verify($root, $bundleDir, $mapFile); // after rebuilding the Map; writes verification-result.json
 $undo = $engine->undo($root, $bundleDir, $hostAuthorize); // optional host hook guards the restore too
+$recovery = $engine->recover($root, $bundleDir, $hostAuthorize); // resolve a pending publication-journal.json
 ```
 
 Plan type and contract version are routed only through `CapabilityRegistry`. Anything it does not list (an unknown type, or a known type with an unknown `contract_version`) is rejected before any source is read.
@@ -196,9 +199,40 @@ A refusal that writes no receipt (dry-run preflight refusal such as a `blocked` 
 
 | Situation | Behavior |
 | --- | --- |
-| Source published, receipt write fails | `ReceiptNotPersistedException` (`changedFiles`, `outputDirectory`, previous = the write error). The lock is already released and the transaction committed, so there is no snapshot to restore: the working tree is changed without evidence. No receipt file exists (never a half-written one), so `verify` refuses the bundle and a governed close cannot pass. Restore from version control and re-plan. |
+| Source published, receipt write fails | `ReceiptNotPersistedException` (`changedFiles`, `outputDirectory`, previous = the write error). The transaction committed, so this run cannot undo it. No receipt file exists (never a half-written one), so `verify` refuses the bundle and a governed close cannot pass. The bundle keeps its publication journal: once the bundle is writable again, `agent-edit recover` writes the receipt (see below). |
+| Evidence cannot be written before publication | The publication journal is written before the first source byte changes; if that fails, nothing is published and a `runner_failed` receipt records the attempt. |
 | Apply failed (rolled back), failure receipt write fails | The original apply failure is rethrown unchanged; the receipt problem never replaces it. |
 | Dry run, receipt write fails | The plain write error; nothing was published. |
+
+### Crash safety and `recover`
+
+Before the first source byte changes, under the mutation lock, `applyWithReceipt()` writes `publication-journal.json` into the bundle: for every touched path the digest before and after publication (a move is two paths, a deletion or creation has no digest on one side), a pre-image of every existing file under `before/`, the receipt fields and the pre-publication observation (the `git status` snapshot, or the Map manifest without Git). The journal is removed only after the receipt is persisted and every journaled path is observed in the state the receipt claims. A journal that survives means publication or its evidence did not finish. Every bundle consumer (`apply` reusing the bundle, `verify`, `undo`) refuses such a bundle until `recover` has run.
+
+`agent-edit recover --bundle=PATH [--format=json]` (`EditEngine::recover()`) compares every journaled path with its recorded digests, under the bundle and mutation locks and after the optional host authorization hook:
+
+| Observed state | Result |
+| --- | --- |
+| Every path has its published bytes | `published`: a `runner_succeeded` receipt is written (unless one already records it). Its `changed_files` are observed again by Git (or the stored Map manifest), never taken from the journal, so `verify` still decides on independent evidence; any unrelated change made in the meantime makes the scope check fail closed. |
+| Every path has its original bytes | `not_published`: a `runner_failed` receipt records it. |
+| A mix of both, or a file a publisher had moved aside | `rolled_back`: every path is restored from the bundle's pre-images in one transaction (exact recorded bytes), and a `runner_failed` receipt records the rollback. |
+| Any path matches neither digest, or lies outside the project through a moved or linked parent directory | `conflict` with `conflict: unexpected_file` (exit code 1): someone else changed it. Nothing is touched and the journal stays; resolve the file by hand and run `recover` again. |
+| The bundle already holds a `runner_succeeded` receipt, but the files are not in their published state | `conflict` with `conflict: receipt_claims_publication` (exit code 1): the process died after the receipt was written and the files were changed afterwards. Nothing is touched. Restoring the *original* bytes does not resolve this; put the published bytes back (or remove the receipt deliberately) and run `recover` again. |
+| The plan changes no bytes at all | Recorded as published when a success receipt exists, otherwise as `not_published`. |
+
+Publisher temporary files (`*.agent-edit-tx-*`, `*.agent-edit-plan-*`) next to journaled paths are removed in every non-conflict case, but only when they appeared after the journal was written and their bytes are exactly the journaled original or published bytes of that path. A file with a publisher temporary name that already existed when the journal was written is recorded in the journal and never removed or read as a displaced original. A recovered receipt carries a `recovery` block (`attempt`, `state`, `rolled_back`). `attempt` binds it to the journal it resolved. If a recovery completed its rollback but lost its result file, running it again keeps that rollback receipt; a rollback receipt left by an earlier attempt on a reused bundle is never mistaken for the current one. When an existing success receipt is kept, the Map manifest it names is restored from the journal if it was lost; a receipt naming a manifest the journal does not hold stops recovery and keeps the journal. A journal entry for an original file without recorded permission bits is refused, so a restore never falls back to a default mode. Otherwise running `recover` again reports `nothing_to_recover`. Files outside the journal, such as uncommitted work in progress, are never touched. Restored files get their original permission bits back; pre-images in the bundle are written private (`0600`).
+
+The bundle must not contain any path the plan publishes; such a plan is refused before anything is written. A bundle outside the project (any `outputDirectory` `applyWithReceipt()` accepts) can be recovered by its absolute path. `verify` and `undo` hold the bundle lock while they check for a pending journal and read the receipt.
+
+What is and is not promised:
+
+| Failure | Guarantee |
+| --- | --- |
+| Exception during publication (failed rename, syntax error, changed source) | Rolled back in-process; `runner_failed` receipt; no journal left. |
+| Rollback itself incomplete | The journal stays; `recover` finishes the rollback. |
+| Receipt cannot be written | The journal stays; `recover` writes the receipt. |
+| Process killed (`SIGKILL`, OOM killer) at any point after the journal is written | `recover` reaches a consistent state from the bundle alone. Covered by real-process kill tests at several points of a multi-file publication, for direct edits and Map plans. |
+| Process killed before the journal is written | Nothing was published. |
+| Power loss or kernel crash | **Not guaranteed.** The journal and pre-images are flushed with `fsync` before they are renamed into place, but directory entries are not synced and filesystems differ in what survives. Treat the working tree as unverified and check it with version control. |
 
 ## Boundaries
 
