@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+
+- `agent-edit instructions --format=text`: the same six rules and plan commands as the JSON form in about a sixth of the size (2.9 KB instead of 16 KB with all 16 plans), meant for a coding agent's context. The JSON and TOON forms keep the machine-readable capability data for hosts. A test keeps the text form under 3,200 bytes and in sync with the JSON rules and plans; the README records the measured size of each form.
+
 ## 0.7.0 - 2026-11-19
 
 ### Added

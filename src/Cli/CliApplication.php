@@ -135,10 +135,10 @@ Usage:
   agent-edit verify --bundle=PATH [--map-index PATH] [--map-root PATH] [--accept-residue=REASON] [--format=text|json]
   agent-edit schema [source_edit_plan]
   agent-edit capabilities [--format=json|toon] [--with-map=FILE|-]
-  agent-edit instructions [--format=json|toon] [--with-map=FILE|-]
+  agent-edit instructions [--format=json|toon|text] [--with-map=FILE|-]
 
 `--with-map` takes `agent-map plan-capabilities --format=json` and reports which plans are really executable.
-`instructions` emits reusable coding-agent guidance and the corresponding capability data.
+`instructions` emits reusable coding-agent guidance and the corresponding capability data; --format=text is the compact form for an agent's context.
 
 Plans come from `agent-map` (for example `agent-map method-move-plan`) or, for a quick local fix, from the caller as a
 `source_edit_plan` (`agent-edit edit`, or `agent-edit apply -` with the plan on stdin; `agent-edit schema` prints the

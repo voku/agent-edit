@@ -96,6 +96,32 @@ final class CapabilitiesTest extends TestCase
         self::assertStringContainsString('normal coding and review workflow', $guidance);
     }
 
+    public function testTextInstructionsCarryTheSameRulesAndPlansAtAFractionOfTheJsonSize(): void
+    {
+        $cli = new CliApplication(sys_get_temp_dir());
+        ob_start();
+        self::assertSame(0, $cli->run(['agent-edit', 'instructions', '--format=json']));
+        $json = (string) ob_get_clean();
+        ob_start();
+        self::assertSame(0, $cli->run(['agent-edit', 'instructions', '--format=text']));
+        $text = (string) ob_get_clean();
+
+        $decoded = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
+        foreach ($decoded['instructions'] as $rule) {
+            self::assertStringContainsString($rule, $text);
+        }
+        foreach ($decoded['plans'] as $plan) {
+            self::assertStringContainsString('- ' . $plan['plan_type'] . ' ', $text);
+            if (is_string($plan['agent_map_command'])) {
+                self::assertStringContainsString($plan['agent_map_command'], $text);
+            }
+        }
+        // Context budget for the prompt-ready form (about 750 tokens at ~4 bytes per token). The JSON form carries
+        // machine capability data for hosts and is several times larger; it must not be the form put into context.
+        self::assertLessThan(3200, strlen($text), 'Keep the prompt-ready instructions within their context budget.');
+        self::assertGreaterThan(4 * strlen($text), strlen($json));
+    }
+
     public function testInstructionsWithMapExposeOnlyExactExecutableIntersection(): void
     {
         $path = tempnam(sys_get_temp_dir(), 'agent-edit-map-capabilities-');

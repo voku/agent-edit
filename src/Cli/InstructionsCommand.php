@@ -81,13 +81,18 @@ final readonly class InstructionsCommand
             'capability_data' => $capabilityData,
         ];
 
+        if ($format === 'text') {
+            echo $this->text($payload['instructions'], $plans, $resolved);
+
+            return 0;
+        }
         if ($format === 'toon') {
             echo Toon::encode($payload) . "\n";
 
             return 0;
         }
         if ($format !== 'json') {
-            fwrite(STDERR, "[ERROR] --format must be json or toon.\n");
+            fwrite(STDERR, "[ERROR] --format must be json, toon or text.\n");
 
             return 2;
         }
@@ -95,6 +100,36 @@ final readonly class InstructionsCommand
         echo json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n";
 
         return 0;
+    }
+
+    /**
+     * The prompt-ready form: the same rules and plan commands as the JSON payload, without the machine-readable
+     * capability data a host needs but a coding agent does not. It is about a tenth of the JSON size.
+     *
+     * @param list<string> $rules
+     * @param list<array<string, mixed>> $plans
+     */
+    private function text(array $rules, array $plans, bool $resolved): string
+    {
+        $lines = ['agent-edit rules:'];
+        foreach ($rules as $index => $rule) {
+            $lines[] = ($index + 1) . '. ' . $rule;
+        }
+        $lines[] = '';
+        $lines[] = $resolved
+            ? 'Executable plans (installed Map/Edit intersection):'
+            : 'Plans (registry upper bound; pass --with-map for the installed intersection):';
+        foreach ($plans as $plan) {
+            $versions = is_array($plan['contract_versions'] ?? null) ? implode('|', array_map('strval', $plan['contract_versions'])) : '';
+            $source = is_string($plan['agent_map_command'] ?? null) ? $plan['agent_map_command'] : 'caller-authored: ' . implode(', ', is_array($plan['commands'] ?? null) ? array_map('strval', $plan['commands']) : []);
+            $flags = array_keys(array_filter([
+                'requires PHPStan' => ($plan['requires_phpstan'] ?? false) === true,
+                'moves files' => ($plan['moves_files'] ?? false) === true,
+            ]));
+            $lines[] = '- ' . (string) ($plan['plan_type'] ?? '') . ' ' . $versions . ': ' . $source . ($flags === [] ? '' : ' (' . implode(', ', $flags) . ')');
+        }
+
+        return implode("\n", $lines) . "\n";
     }
 
     /** @return array<mixed> */
