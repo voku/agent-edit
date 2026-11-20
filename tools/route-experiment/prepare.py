@@ -88,7 +88,7 @@ def install_tools(target: Path, versions: dict, composer: bool) -> dict:
 
 
 def install_runtime_wrappers(target: Path, runtime: Path) -> dict:
-    """In-session runs without Composer access: a hard-linked copy of one prepared runtime (agent-edit at the pinned
+    """In-session runs without Composer access: an independent copy of one prepared runtime (agent-edit at the pinned
     release with its vendor directory) inside the workspace, at tools/route-tools/runtime, and wrappers that call it by
     a relative path. Nothing the agent is pointed at lies outside the workspace: in Run 3 a wrapper that called an
     outside path was itself a reason not to use the tools. Every call is logged to tools/route-tools/calls.log (ignored
@@ -96,7 +96,9 @@ def install_runtime_wrappers(target: Path, runtime: Path) -> dict:
     and grade.py reports whether it changed."""
     copy = target / 'runtime'
     target.mkdir(parents=True)
-    subprocess.run(['cp', '-al', str(runtime), str(copy)], check=True)
+    # An independent copy: a hard link would let a write through one workspace change the source runtime and every
+    # other arm prepared from it.
+    shutil.copytree(runtime, copy, symlinks=True)
     bindir = target / 'vendor/bin'
     bindir.mkdir(parents=True)
     binaries = {'agent-edit': 'runtime/bin/agent-edit', 'agent-map': 'runtime/vendor/bin/agent-map'}

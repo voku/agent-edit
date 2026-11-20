@@ -87,7 +87,10 @@ def simulate_writer(out: Path) -> None:
     from hierarchy_rename import STALE_PATH, stale_insert
     target = out / 'repo' / STALE_PATH
     target.write_text(stale_insert(target.read_text(), 'amount'))
-    (out / 'stale-writer.jsonl').write_text(json.dumps({'at': 0, 'event': 'wrote', 'path': STALE_PATH}) + '\n')
+    (out / 'stale-writer.jsonl').write_text(
+        json.dumps({'at': 0, 'event': 'first_open', 'name': Path(STALE_PATH).name}) + '\n'
+        + json.dumps({'at': 0, 'event': 'wrote', 'path': STALE_PATH}) + '\n'
+    )
 
 
 def grade(out: Path, with_tests: bool) -> dict:

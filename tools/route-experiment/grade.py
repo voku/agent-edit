@@ -234,9 +234,11 @@ def main() -> None:
             'events': [e.get('event') for e in events],
             'target_changed_after_write': bool(wrote) and target.exists() and target.stat().st_mtime > wrote['at'] + 0.5,
         }
-        if wrote is None:
+        opened = next((i for i, e in enumerate(events) if e.get('event') == 'first_open'), None)
+        written = next((i for i, e in enumerate(events) if e.get('event') == 'wrote'), None)
+        if opened is None or written is None or opened > written:
             row['correct'] = False
-            row['ungradeable'] = 'the concurrent writer never wrote; the run did not test a stale read'
+            row['ungradeable'] = 'the writer did not write after an open of the target file; the run did not test a stale read'
     row['cost_per_success_usd'] = row['cost_usd'] if row['correct'] and row['cost_usd'] is not None else None
     print(json.dumps(row, indent=2))
     if args.ledger:
