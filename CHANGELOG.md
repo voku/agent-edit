@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Development
 
 - Route experiment Run 2: 12 in-session runs on two harder cases, `hierarchy-rename` (generated interface hierarchy with same-line unrelated methods) and `recall-collect-rename` (25 files of real code). All correct, all native, no tool call in any arm; guidance cost about 4% more tokens. Results and the follow-up list are in `docs/route-experiment.md`.
+- The route experiment kit pins agent-map 0.24.1, which fixes the three agent-map follow-ups from Run 2 (nullsafe calls, first-class callables, anonymous implementations).
 - New token-level oracle (`oracles/token-rename.php`), generated fixture source type, calibration of the hierarchy native shortcut, and PHPStan in the vendor shim.
 
 ## 0.8.1 - 2026-11-19
