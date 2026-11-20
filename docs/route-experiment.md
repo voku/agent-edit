@@ -1,6 +1,6 @@
 # Route experiment: do real agents gain anything from deterministic editing?
 
-Status: **Runs 1–6 done** (56 in-session runs; see Results). Runs 1–5 hit a ceiling: every arm was correct on every
+Status: **Runs 1–7 done** (62 in-session runs; see Results). Run 7 repeats Run 4's stale-read case with a corrected writer; every agent survived the stale read. Runs 1–5 hit a ceiling: every arm was correct on every
 case. Run 6 is the first run with a difference in correctness, and the difference is project context, not tools.
 Agents given the project's memory and architecture rules kept a policy that the code does not show: 4/4 correct. Agents
 without them, with or without the editing tools, could not know it: 0/4. In Run 4, once the tools sat inside the
@@ -482,6 +482,36 @@ missing knowledge exists only in the project context. Per-run data: the `"run": 
 - **For the routing hypothesis:** six runs give no case for routing between edit routes. They give a case for keeping
   project knowledge where agents read it before they edit: `MEMORY.md` rows and `#[Rule]` attributes with
   `changeGuidance`. The editing tools are worth what that context tells them to do.
+
+### Run 7 (2026-11-20, the stale read, repeated with a corrected writer)
+
+Run 4's writer fired on a directory listing (see Run 4), so its stale-read result did not stand. Run 7 repeats
+`stale-rename` (A/B/C × 2) after three review fixes:
+- **The writer** fires only after `src/Checkout/Cart.php` itself is opened.
+- **`grade.py`** counts a run only when that open precedes the write.
+- **The runtime** is an independent copy instead of hard links.
+
+Per-run data: the `"run": 7` rows in [`route-experiment.results.jsonl`](route-experiment.results.jsonl).
+
+| Arm | Correct | Route | Writer | Mean tokens | Mean tool calls | Mean seconds |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| A | 2/2 | native | fired after the agent read `Cart.php` (2/2) | 70,311 | 4.5 | 26.0 |
+| B | 2/2 | native | same (2/2) | 73,756 | 4.0 | 24.3 |
+| C | 2/2 | native | same (2/2) | 76,331 | 5.5 | 30.0 |
+
+**What this shows:**
+
+- **A real stale read, survived by every agent.** In all 6 runs the writer logged `first_open` on `Cart.php` and wrote 4 s
+  later, so each agent's view of the file was out of date when it came to edit it. Every agent edited `Cart.php`
+  after the write, kept the writer's `preview()` method and renamed its family call, and the oracle passed. All six
+  reported, unprompted, that the method appeared between their first read and their edit, and asked for it to be
+  checked.
+- **How they survived it is not established here.** The reports and the final trees show that each agent ended up
+  working on the current file, by re-reading it or by applying a replacement to its current text. This run does not
+  show which host mechanism caused that. It is not the guarantee agent-edit gives: agent-edit binds an edit to the
+  exact bytes the agent read before deciding, through `expected_source_sha256` or a plan's source hashes. On the route
+  check (Run 4), that binding refused the stale plan.
+- **The tools were not used** on this small case, in any arm.
 
 ### Calibration
 
