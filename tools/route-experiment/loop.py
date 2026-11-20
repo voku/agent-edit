@@ -73,15 +73,35 @@ spl_autoload_register(static function (string $class): void {
     $file = getcwd() . '/src/' . str_replace('\\', '/', substr($class, strlen('Shop\\'))) . '.php';
     if (is_file($file)) { require $file; }
 });
-[$old, $new] = [$argv[1], $argv[2]];
+// An alias passes when the effective old method (inherited is fine) is marked deprecated, its body forwards to
+// $this->new(...), and both return the same value; equal values alone would let a copied implementation pass.
+$aliasOk = static function (object $source, string $old, string $new): bool {
+    if (!method_exists($source, $new) || !method_exists($source, $old)) {
+        return false;
+    }
+    $method = new ReflectionMethod($source, $old);
+    $deprecated = str_contains((string) $method->getDocComment(), '@deprecated') || $method->getAttributes('Deprecated') !== [];
+    $lines = array_slice(file((string) $method->getFileName()), $method->getStartLine() - 1, $method->getEndLine() - $method->getStartLine() + 1);
+    $forwards = preg_match('/\$this\s*->\s*' . preg_quote($new, '/') . '\s*\(/', implode('', $lines)) === 1;
+
+    return $deprecated && $forwards && $source->$old() === $source->$new();
+};
 $sources = [new Shop\Pricing\Product(500), new Shop\Pricing\Service(50, 3), new Shop\Pricing\Subscription(20, 2, 6),
     new Shop\Pricing\Bundle([new Shop\Pricing\Product(100)])];
+$pairs = array_chunk(array_slice($argv, 1), 2);
 $family = [];
 foreach ($sources as $source) {
-    $family[$source::class] = method_exists($source, $new) && method_exists($source, $old) && $source->$old() === $source->$new();
+    foreach ($pairs as [$old, $new]) {
+        $family[$source::class . '::' . $old] = $aliasOk($source, $old, $new);
+    }
 }
+[$old, $new] = end($pairs);
 $coupon = new Shop\Promo\Coupon(5);
-echo json_encode(['family_alias' => $family, 'coupon_untouched' => method_exists($coupon, $old) && !method_exists($coupon, $new)]);
+echo json_encode([
+    'family_alias' => $family,
+    'interface_declares_new' => method_exists('Shop\Pricing\PriceSource', $new),
+    'coupon_untouched' => method_exists($coupon, $old) && !method_exists($coupon, $new),
+]);
 '''
 STEPS = {
     1: {'old': 'amount', 'new': 'price', 'old_calls_outside_pricing': 4, 'new_calls_outside_pricing': 6},
@@ -170,14 +190,17 @@ def grade(args) -> None:
     repo = out / 'repo'
     want = php(out / 'baseline', BEHAVIOUR)
     got = php(repo, BEHAVIOUR)
-    policy_raw = php(repo, POLICY, step['old'], step['new'])
+    # Step 2 must also keep step 1's amount() -> price() aliases: the published API covers both renames.
+    pairs = [STEPS[1]['old'], STEPS[1]['new']] + ([step['old'], step['new']] if manifest['step'] == 2 else [])
+    policy_raw = php(repo, POLICY, *pairs)
     try:
         policy = json.loads(policy_raw)
     except json.JSONDecodeError:
         policy = {'error': policy_raw}
     checks = {
         'behaviour unchanged': not want.startswith('error') and got == want,
-        'every price source keeps the old name as an alias of the new': bool(policy.get('family_alias')) and all(policy['family_alias'].values()),
+        'every price source keeps the old name as a deprecated alias that forwards to the new': bool(policy.get('family_alias')) and all(policy['family_alias'].values()),
+        'the interface declares the new name': policy.get('interface_declares_new') is True,
         'unrelated Coupon method untouched': policy.get('coupon_untouched') is True,
         'internal callers use the new name': calls(repo, step['new']) == step['new_calls_outside_pricing']
             and calls(repo, step['old']) == step['old_calls_outside_pricing'],
@@ -186,7 +209,7 @@ def grade(args) -> None:
         'experiment': 'loop', 'step': manifest['step'], 'arm': manifest['arm'], 'run_dir': out.parent.name + '/' + out.name,
         'correct': all(checks.values()),
         # Correct apart from the alias: what an agent that did not know the policy would produce.
-        'correct_without_policy': checks['behaviour unchanged'] and checks['unrelated Coupon method untouched'] and checks['internal callers use the new name'],
+        'correct_without_policy': checks['behaviour unchanged'] and checks['unrelated Coupon method untouched'] and checks['internal callers use the new name'] and checks['the interface declares the new name'],
         'checks': checks, 'policy': policy, 'behaviour': got[-200:],
     }
     if manifest['step'] == 1:

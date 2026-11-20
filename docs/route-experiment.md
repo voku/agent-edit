@@ -530,8 +530,12 @@ what it learned into the repository, does a later agent benefit? It uses `tools/
 Both arms get the same `AGENTS.md` paragraph on project context (read `MEMORY.md`, run `itp-context-summarize`) and
 the itp-context CLI. **L1** adds one required workflow step: before finishing, record every durable rule learned
 during the task as a `MEMORY.md` row and, for a symbol, as an ItpContext `#[Rule]`. **L0** does not have that step.
-Three pairs per arm, 12 agent runs. Grading checks behaviour, the alias on every price source, the untouched
-`Coupon` method, call sites, and in step 1 what was recorded. Per-run data:
+Three pairs per arm, 12 agent runs. Grading checks:
+- behaviour, and that the interface declares the new name;
+- on every price source, the old name kept as a `@deprecated` alias whose body forwards to the new method, and in
+  step 2 also step 1's `amount()` aliases;
+- that the `Coupon` method is untouched, and the call sites;
+- in step 1, what was recorded. Per-run data:
 [`route-experiment.loop.results.jsonl`](route-experiment.loop.results.jsonl).
 
 | Arm | Step 1 correct | Recorded in step 1 | Step 2 correct | Step 1 mean tokens / s | Step 2 mean tokens / s |
