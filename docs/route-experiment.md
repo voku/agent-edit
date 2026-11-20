@@ -2,7 +2,8 @@
 
 Status: **Runs 1–3 done** (30 in-session runs; see Results). Every run in every arm was correct, including Run 3's
 rename of 241 sites in 110 files. The runs show tool selection and overhead, not an effectiveness difference. No run
-used Map + Edit. On the large case, agents wrote their own throwaway type-resolution script instead. Preparing Run 2
+used Map + Edit. On the large case, agents applied the edits in bulk, and four of six reported writing their own
+throwaway type-resolution script. Preparing Run 2
 found four defects in the Map + Edit route itself (see Follow-ups); all are fixed in agent-edit 0.8.1 and agent-map
 0.24.1/0.24.2.
 
@@ -300,10 +301,11 @@ and graded correct.
 **What this shows:**
 
 - **Still a ceiling, and a new way of reaching it.** All 6 runs changed exactly the 110 expected files, matched the
-  expected tree by tokens and kept behaviour. No agent edited the 241 sites by hand. Each one wrote a short throwaway
-  script, several using PHP reflection on the navigators' return types, that resolved every receiver and rewrote only
-  the family's calls. Every agent then ran `run.php`. The task the tools were built for was done in about 5 tool calls
-  and 35–50 s, with a tool the agent generated for the job.
+  expected tree by tokens and kept behaviour. With 4–7 tool calls per run, every agent applied its edits in bulk
+  rather than site by site. Four reported a throwaway script that resolved each receiver through the navigators'
+  return types and rewrote only the family's calls; two of them used PHP reflection. The two A runs did not describe
+  their method. Every agent ran `run.php` to check. The task the tools were built for was done in 32–52 s, mostly with
+  a tool the agent generated for the job.
 - **Why the tools stayed unused here.** One C agent ran `agent-map --help` and then wrote its own script anyway. One B
   agent noticed `tools/route-tools` and skipped it because the wrapper "runs from a folder outside the repository",
   which the instruction forbade (see confounds). The other runs did not mention the tools.
