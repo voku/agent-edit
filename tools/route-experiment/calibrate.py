@@ -45,6 +45,8 @@ def reference(case: str, repo: Path) -> None:
             replace(repo, path, 'toRecallResult', 'asRecallResult', 0)
     elif case == 'hierarchy-rename':
         subprocess.run(['python3', str(KIT / 'fixtures/hierarchy_rename.py'), str(repo), 'expected'], check=True)
+    elif case == 'scale-rename':
+        subprocess.run(['python3', str(KIT / 'fixtures/scale_rename.py'), str(repo), 'expected'], check=True)
     elif case == 'recall-collect-rename':
         for path in sorted(p for d in ('src', 'tests') for p in (repo / d).rglob('*.php')):
             text = path.read_text()
@@ -58,11 +60,13 @@ def reference(case: str, repo: Path) -> None:
 SHORTCUTS = {
     'fixture-rename': ['src/Cart.php'],
     'hierarchy-rename': ['src/Promo/Coupon.php', 'src/Promo/GiftCard.php'],
+    # Every unrelated Config class plus the services whose calls are all unrelated.
+    'scale-rename': None,
 }
 
 
 def shortcut(case: str, repo: Path) -> None:
-    old, new = ('total', 'grandTotal') if case == 'fixture-rename' else ('amount', 'price')
+    old, new = {'fixture-rename': ('total', 'grandTotal'), 'hierarchy-rename': ('amount', 'price'), 'scale-rename': ('value', 'amount')}[case]
     for path in sorted((repo / 'src').rglob('*.php')):
         text = path.read_text()
         text = re.sub(r'(->|::)' + old + r'\(', r'\1' + new + '(', text)
@@ -107,7 +111,12 @@ def main() -> None:
                 (repo / 'NOTES.md').write_text('stray\n')
             row = grade(out, args.with_tests)
             want_unintended = {'reference+stray': ['NOTES.md'], 'native-shortcut': SHORTCUTS.get(case['id'], [])}.get(outcome, [])
-            ok = row['correct'] is want_correct and row['unintended_paths'] == want_unintended
+            if want_unintended is None:
+                # Too many to list: the shortcut must at least rename every unrelated Config class.
+                configs = sorted(str(p.relative_to(repo)) for p in (repo / 'src/Config').glob('*.php'))
+                ok = row['correct'] is want_correct and set(configs) <= set(row['unintended_paths'])
+            else:
+                ok = row['correct'] is want_correct and row['unintended_paths'] == want_unintended
             report.append({'case': case['id'], 'outcome': outcome, 'correct': row['correct'], 'unintended_paths': row['unintended_paths'], 'ok': ok})
             if not ok:
                 failures.append((case['id'], outcome, row['oracle']))

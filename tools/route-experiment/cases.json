@@ -3,7 +3,7 @@
   "kind": "route_experiment_cases",
   "note": "Tasks name only the intended change. Oracles live in oracles/ and never enter a workspace.",
   "agent_edit_version": "0.8.1",
-  "agent_map_version": "0.24.1",
+  "agent_map_version": "0.24.2",
   "cases": [
     {
       "id": "fixture-rename",
@@ -131,6 +131,20 @@
       ],
       "expected_route": "map+edit",
       "test_command": "vendor/bin/phpunit"
+    },
+    {
+      "id": "scale-rename",
+      "kind": "adversarial",
+      "source": {
+        "type": "generator",
+        "script": "fixtures/scale_rename.py"
+      },
+      "task": "tasks/scale-rename.md",
+      "oracle": "oracles/token-rename.php",
+      "allowed_paths": {
+        "generator_diff": "fixtures/scale_rename.py"
+      },
+      "expected_route": "map+edit"
     }
   ]
 }

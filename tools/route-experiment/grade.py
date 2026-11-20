@@ -130,6 +130,21 @@ def changed_paths(repo: Path) -> list[str]:
     return sorted(p for p in out.splitlines() if p and not p.startswith(ignored) and p not in ('plan.json',))
 
 
+def allowed_paths(case: dict) -> list[str]:
+    """A list in cases.json, or {"generator_diff": script} for a generated case: every file that differs between the
+    generator's baseline and expected trees."""
+    spec = case['allowed_paths']
+    if isinstance(spec, list):
+        return spec
+    with tempfile.TemporaryDirectory() as scratch:
+        trees = {}
+        for variant in ('baseline', 'expected'):
+            root = Path(scratch) / variant
+            subprocess.run(['python3', str(KIT / spec['generator_diff']), str(root), variant], check=True)
+            trees[variant] = {str(p.relative_to(root)): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+        return sorted(p for p in trees['expected'] if trees['baseline'].get(p) != trees['expected'][p]) + list(spec.get('extra', []))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument('--out', required=True)
@@ -164,7 +179,8 @@ def main() -> None:
 
     changed = changed_paths(out / 'repo')
     changed = [p for p in changed if not p.startswith('vendor/')]
-    unintended = [p for p in changed if p not in case['allowed_paths'] and not (manifest['arm'] == 'C' and p == 'AGENTS.md')]
+    allowed = allowed_paths(case)
+    unintended = [p for p in changed if p not in allowed and not (manifest['arm'] == 'C' and p == 'AGENTS.md')]
     run_record = json.loads((out / 'run.json').read_text()) if (out / 'run.json').exists() else {}
     row = {
         'case': manifest['case'],
