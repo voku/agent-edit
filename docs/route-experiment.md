@@ -364,7 +364,7 @@ parallel. Per-run data: the `"run": 4` rows in [`route-experiment.results.jsonl`
 
 - **Where the tools live decides whether they are used.** With the runtime inside the workspace, 4 of 4 agents on the
   large rename used Map + Edit, against 0 of 4 in Run 3. Both arm B agents found the tools without any mention, read
-  `--help`, built the map, planned, and applied a safe 247-edit plan. Three also ran `verify`. In Run 3 the same arms
+  `--help`, built the map, planned, and applied a safe 247-edit plan. Both C agents ran `verify` to a clean result. In Run 3 the same arms
   wrote their own scripts. The Run 3 result ("agents prefer their own script") was therefore mostly an artefact of the
   kit, and it is withdrawn.
 - **Using the tools cost time and calls, not correctness.** Tool use paid nothing back here. The Map + Edit runs were
@@ -372,7 +372,7 @@ parallel. Per-run data: the `"run": 4` rows in [`route-experiment.results.jsonl`
   dry runs, a retried `apply`) and 1.3–2 times the time. On a task agents can already script reliably, discovering a
   CLI costs more than writing the script.
 - **The stale read broke nobody.** The writer fired in all 6 runs, 9–10 s in. Every agent changed `Cart.php` after the
-  write and renamed the new `preview()` call. Four agents reported, unprompted, that a method they had not written had
+  write and renamed the new `preview()` call. Five of six reported, unprompted, that a method they had not written had
   appeared. Each of them flagged it for whoever owned the change and left the method in place. The host's edit tooling
   already catches this case. An edit against a file that changed since it was read fails, or a bulk edit runs on the
   file's current content. So the agent re-reads, which is the same guarantee agent-edit's source hashes give. No agent
@@ -384,9 +384,10 @@ parallel. Per-run data: the `"run": 4` rows in [`route-experiment.results.jsonl`
 
 **Confounds and deviations**, in addition to those of Runs 1–3:
 
-- **Index outside the repository.** Several agents wrote the map index and plans to the system temp directory, which
-  the instruction allows. One B agent then could not run `verify`, because verify needs the index inside the
-  repository, and it deleted its receipt directory. Its source changes were still correct.
+- **Receipts not kept.** Several agents wrote the map index and plans to the system temp directory, which the
+  instruction allows. Both B agents deleted their `.agent-edit` receipt directories afterwards. One had tried
+  `verify`, which failed because its index was outside the repository; the other never ran it. Their source changes
+  were still correct, but the verification evidence the route exists for was discarded.
 - **Writer timing.** The writer fires once, a fixed 4 s after the first file open. A writer that changes several files,
   or fires again late in the run, is a harder case and not covered.
 - **Repetitions.** Two per cell. The difference in tool use (0/4 against 4/4) is large; the time differences are
