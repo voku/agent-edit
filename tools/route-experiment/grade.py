@@ -181,7 +181,7 @@ def main() -> None:
     changed = changed_paths(out / 'repo')
     changed = [p for p in changed if not p.startswith('vendor/')]
     allowed = allowed_paths(case)
-    unintended = [p for p in changed if p not in allowed and not (manifest['arm'] == 'C' and p == 'AGENTS.md')]
+    unintended = [p for p in changed if p not in allowed and not (manifest['arm'] in ('C', 'D', 'E') and p == 'AGENTS.md')]
     run_record = json.loads((out / 'run.json').read_text()) if (out / 'run.json').exists() else {}
     row = {
         'case': manifest['case'],
@@ -219,6 +219,10 @@ def main() -> None:
     elif not (out / 'transcript.jsonl').exists():
         row['chosen_route'] = 'native' if changed else 'none'
         row['route_tool_calls'] = {'agent_map': 0, 'agent_edit': 0}
+    # Context arms: how often the agent asked itp-context (reading MEMORY.md is not observable from here).
+    itp_log = out / 'repo/tools/itp/calls.log'
+    if manifest.get('project_context'):
+        row['itp_calls'] = [line.split('\t', 2)[1] + ' ' + line.split('\t', 2)[2] for line in itp_log.read_text().splitlines() if line.count('\t') >= 2] if itp_log.exists() else []
     # stale-rename: when the concurrent writer fired, and whether the agent touched the file after it.
     writer_log = out / 'stale-writer.jsonl'
     if case.get('concurrent_writer'):

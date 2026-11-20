@@ -47,6 +47,9 @@ def reference(case: str, repo: Path) -> None:
         subprocess.run(['python3', str(KIT / 'fixtures/hierarchy_rename.py'), str(repo), 'expected'], check=True)
     elif case == 'stale-rename':
         subprocess.run(['python3', str(KIT / 'fixtures/hierarchy_rename.py'), str(repo), 'expected-stale'], check=True)
+    elif case == 'context-rename':
+        context = ['--context'] if (repo / 'MEMORY.md').exists() else []
+        subprocess.run(['python3', str(KIT / 'fixtures/context_rename.py'), str(repo), 'expected'] + context, check=True)
     elif case == 'scale-rename':
         subprocess.run(['python3', str(KIT / 'fixtures/scale_rename.py'), str(repo), 'expected'], check=True)
     elif case == 'recall-collect-rename':
@@ -94,6 +97,7 @@ def main() -> None:
     parser.add_argument('--work', required=True)
     parser.add_argument('--recall-source')
     parser.add_argument('--with-tests', action='store_true', help='also run case test commands (needs Composer access)')
+    parser.add_argument('--itp-context', help='a voku/itp-context checkout, to also calibrate the context arm (E)')
     args = parser.parse_args()
     work = Path(args.work).resolve()
     work.mkdir(parents=True, exist_ok=True)
@@ -110,9 +114,18 @@ def main() -> None:
         if case.get('concurrent_writer'):
             # A stale read that overwrote the writer's method, and a rename that never re-read the file.
             outcomes |= {'stale-overwrite': False, 'missed-concurrent-call': False}
-        for outcome, want_correct in outcomes.items():
-            out = work / f"{case['id']}-{outcome}"
-            prepare = ['python3', str(KIT / 'prepare.py'), '--case', case['id'], '--arm', 'A', '--out', str(out)]
+        if case.get('context'):
+            # The rename without the configured dispatch name, and with the payload field renamed as well.
+            outcomes |= {'config-missed': False, 'field-renamed': False}
+        arms = ['A'] + (['E'] if case.get('context') and args.itp_context else [])
+        if case.get('context') and not args.itp_context:
+            report.append({'case': case['id'], 'arm': 'E', 'skipped': 'no --itp-context'})
+        for arm, (outcome, want_correct) in [(arm, item) for arm in arms for item in outcomes.items()]:
+            if arm == 'E' and outcome not in ('untouched', 'reference', 'config-missed'):
+                continue
+            out = work / f"{case['id']}-{arm}-{outcome}"
+            prepare = ['python3', str(KIT / 'prepare.py'), '--case', case['id'], '--arm', arm, '--out', str(out)]
+            prepare += ['--itp-context', args.itp_context] if arm == 'E' else []
             prepare += ['--source', source] if source else []
             prepare += [] if args.with_tests else ['--no-composer']
             subprocess.run(prepare, check=True, capture_output=True, text=True)
@@ -129,6 +142,15 @@ def main() -> None:
                 sys.path.insert(0, str(KIT / 'fixtures'))
                 from hierarchy_rename import stale_insert
                 cart.write_text(stale_insert(cart.read_text(), 'amount'))
+            if outcome in ('config-missed', 'field-renamed'):
+                reference(case['id'], repo)
+                gateway = repo / 'config/gateway.php'
+                text = gateway.read_text()
+                if outcome == 'config-missed':
+                    text = text.replace("'price_method' => 'price'", "'price_method' => 'amount'")
+                else:
+                    text = text.replace("'amount_field' => 'amount'", "'amount_field' => 'price'")
+                gateway.write_text(text)
             if outcome == 'native-shortcut':
                 shortcut(case['id'], repo)
             if outcome == 'reference+stray':
@@ -141,7 +163,7 @@ def main() -> None:
                 ok = row['correct'] is want_correct and set(configs) <= set(row['unintended_paths'])
             else:
                 ok = row['correct'] is want_correct and row['unintended_paths'] == want_unintended
-            report.append({'case': case['id'], 'outcome': outcome, 'correct': row['correct'], 'unintended_paths': row['unintended_paths'], 'ok': ok})
+            report.append({'case': case['id'], 'arm': arm, 'outcome': outcome, 'correct': row['correct'], 'unintended_paths': row['unintended_paths'], 'ok': ok})
             if not ok:
                 failures.append((case['id'], outcome, row['oracle']))
     print(json.dumps(report, indent=2))
