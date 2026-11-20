@@ -200,6 +200,36 @@
         "memory": "MEMORY.md",
         "itp_rules": "src/Context/PricingRules.php"
       }
+    },
+    {
+      "id": "policy-rename",
+      "kind": "adversarial",
+      "source": {
+        "type": "generator",
+        "script": "fixtures/policy_rename.py"
+      },
+      "task": "tasks/policy-rename.md",
+      "oracle": "oracles/policy-rename.php",
+      "allowed_paths": [
+        "src/Pricing/PriceSource.php",
+        "src/Pricing/Product.php",
+        "src/Pricing/Service.php",
+        "src/Pricing/Subscription.php",
+        "src/Pricing/Bundle.php",
+        "src/Checkout/Cart.php",
+        "src/Checkout/Quote.php",
+        "src/Checkout/Totals.php",
+        "src/Checkout/Refund.php",
+        "src/Checkout/Display.php",
+        "src/Report/Ledger.php",
+        "MEMORY.md",
+        "CHANGELOG.md"
+      ],
+      "expected_route": "map+edit",
+      "context": {
+        "memory": "MEMORY.md",
+        "itp_rules": "src/Context/PricingRules.php"
+      }
     }
   ]
 }

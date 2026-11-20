@@ -47,6 +47,9 @@ def reference(case: str, repo: Path) -> None:
         subprocess.run(['python3', str(KIT / 'fixtures/hierarchy_rename.py'), str(repo), 'expected'], check=True)
     elif case == 'stale-rename':
         subprocess.run(['python3', str(KIT / 'fixtures/hierarchy_rename.py'), str(repo), 'expected-stale'], check=True)
+    elif case == 'policy-rename':
+        context = ['--context'] if (repo / 'MEMORY.md').exists() else []
+        subprocess.run(['python3', str(KIT / 'fixtures/policy_rename.py'), str(repo), 'reference'] + context, check=True)
     elif case == 'context-rename':
         context = ['--context'] if (repo / 'MEMORY.md').exists() else []
         subprocess.run(['python3', str(KIT / 'fixtures/context_rename.py'), str(repo), 'expected'] + context, check=True)
@@ -114,14 +117,17 @@ def main() -> None:
         if case.get('concurrent_writer'):
             # A stale read that overwrote the writer's method, and a rename that never re-read the file.
             outcomes |= {'stale-overwrite': False, 'missed-concurrent-call': False}
-        if case.get('context'):
+        if case['id'] == 'context-rename':
             # The rename without the configured dispatch name, and with the payload field renamed as well.
             outcomes |= {'config-missed': False, 'field-renamed': False}
+        if case['id'] == 'policy-rename':
+            # The plain rename that the policy forbids, and an alias that does not delegate.
+            outcomes |= {'plain-rename': False, 'broken-alias': False}
         arms = ['A'] + (['E'] if case.get('context') and args.itp_context else [])
         if case.get('context') and not args.itp_context:
             report.append({'case': case['id'], 'arm': 'E', 'skipped': 'no --itp-context'})
         for arm, (outcome, want_correct) in [(arm, item) for arm in arms for item in outcomes.items()]:
-            if arm == 'E' and outcome not in ('untouched', 'reference', 'config-missed'):
+            if arm == 'E' and outcome not in ('untouched', 'reference', 'config-missed', 'plain-rename'):
                 continue
             out = work / f"{case['id']}-{arm}-{outcome}"
             prepare = ['python3', str(KIT / 'prepare.py'), '--case', case['id'], '--arm', arm, '--out', str(out)]
@@ -151,6 +157,13 @@ def main() -> None:
                 else:
                     text = text.replace("'amount_field' => 'amount'", "'amount_field' => 'price'")
                 gateway.write_text(text)
+            if outcome in ('plain-rename', 'broken-alias'):
+                context = ['--context'] if (repo / 'MEMORY.md').exists() else []
+                variant = 'expected' if outcome == 'plain-rename' else 'reference'
+                subprocess.run(['python3', str(KIT / 'fixtures/policy_rename.py'), str(repo), variant] + context, check=True)
+                if outcome == 'broken-alias':
+                    product = repo / 'src/Pricing/Product.php'
+                    product.write_text(product.read_text().replace('return $this->price();', 'return 0;'))
             if outcome == 'native-shortcut':
                 shortcut(case['id'], repo)
             if outcome == 'reference+stray':
