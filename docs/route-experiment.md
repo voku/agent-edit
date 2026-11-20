@@ -1,11 +1,13 @@
 # Route experiment: do real agents gain anything from deterministic editing?
 
-Status: **Runs 1–7 done** (62 in-session runs; see Results). Run 7 repeats Run 4's stale-read case with a corrected writer; every agent survived the stale read. Runs 1–5 hit a ceiling: every arm was correct on every
-case. Run 6 is the first run with a difference in correctness, and the difference is project context, not tools.
-Agents given the project's memory and architecture rules kept a policy that the code does not show: 4/4 correct. Agents
-without them, with or without the editing tools, could not know it: 0/4. In Run 4, once the tools sat inside the
-workspace, agents used Map + Edit on the large rename, with no gain. Preparing Run 2 found four defects in the Map +
-Edit route itself (see Follow-ups); all are fixed in agent-edit 0.8.1 and agent-map 0.24.1/0.24.2.
+Status: **Runs 1–8 done** (74 in-session runs; see Results). Runs 1–5 and 7 hit a ceiling: every arm was correct.
+Two runs separated the arms, and project context decided both, not the editing tools. In Run 6, agents given a
+project policy through `MEMORY.md` and ItpContext rules followed it in 4/4 runs; agents without it could not, 0/4. In
+Run 8 (the learning loop), a workflow that required agents to *record* what they learned turned a reviewer's one-off
+note into knowledge the next agent used: 3/3 later tasks correct, against 0/3 without that step. Run 7 shows that
+agents survive a real stale read. In Run 4, once the tools sat inside the workspace, agents used Map + Edit on the
+large rename, with no gain. Preparing Run 2 found four defects in the Map + Edit route itself (see Follow-ups); all
+are fixed in agent-edit 0.8.1 and agent-map 0.24.1/0.24.2.
 
 ## Question
 
@@ -512,6 +514,52 @@ Per-run data: the `"run": 7` rows in [`route-experiment.results.jsonl`](route-ex
   exact bytes the agent read before deciding, through `expected_source_sha256` or a plan's source hashes. On the route
   check (Run 4), that binding refused the stale plan.
 - **The tools were not used** on this small case, in any arm.
+
+### Run 8 (2026-11-20, the learning loop: does recorded knowledge reach the next agent?)
+
+Runs 5 and 6 handed the context over ready-made. Run 8 asks the next question: if the workflow makes an agent write
+what it learned into the repository, does a later agent benefit? It uses `tools/route-experiment/loop.py` and
+`fixtures/loop_rename.py`: the hierarchy fixture plus a second family method, `currency()`. `Coupon` has an unrelated
+`currency()` as a trap, and the tree starts with a `MEMORY.md` holding one unrelated row and no rules.
+
+1. **Step 1** renames `amount()` to `price()`. A reviewer note in the task says the API is published, so the old name
+   stays as a `@deprecated` alias.
+2. **Step 2** is done by a fresh agent on step 1's final tree. It renames `currency()` to `currencyCode()` and gets no
+   note. The same policy applies, and it can reach this agent only through what step 1 left in the repository.
+
+Both arms get the same `AGENTS.md` paragraph on project context (read `MEMORY.md`, run `itp-context-summarize`) and
+the itp-context CLI. **L1** adds one required workflow step: before finishing, record every durable rule learned
+during the task as a `MEMORY.md` row and, for a symbol, as an ItpContext `#[Rule]`. **L0** does not have that step.
+Three pairs per arm, 12 agent runs. Grading checks behaviour, the alias on every price source, the untouched
+`Coupon` method, call sites, and in step 1 what was recorded. Per-run data:
+[`route-experiment.loop.results.jsonl`](route-experiment.loop.results.jsonl).
+
+| Arm | Step 1 correct | Recorded in step 1 | Step 2 correct | Step 1 mean tokens / s | Step 2 mean tokens / s |
+| --- | --- | --- | --- | ---: | ---: |
+| L0, no capture step | 3/3 | nothing (0/3) | **0/3** | 71,760 / 22.2 | 69,812 / 13.1 |
+| L1, capture required | 3/3 | `MEMORY.md` row and rule enum with `#[Rule]` (3/3) | **3/3** | 76,641 / 35.4 | 73,772 / 24.4 |
+
+**What this shows:**
+
+- **The capture step carried the policy forward; nothing else did.** All six step-1 agents followed the reviewer
+  note. Only the L1 agents wrote it down, each as a general rule ("renaming a PriceSource method keeps the old name as
+  a deprecated alias"), not as a note about `amount()`. In step 2, every L1 agent read that rule and kept
+  `currency()` as an alias. Every L0 agent did a clean rename that breaks the published API.
+- **The code alone did not teach it.** The L0 step-2 trees already contained step 1's `@deprecated amount()` aliases,
+  a visible example of the policy. No L0 agent inferred a rule from it. A convention left in code without its reason
+  was not enough.
+- **Where the rule was attached mattered less than the memory row.** One L1 step-1 agent attached the `#[Rule]` only
+  to the `amount()` aliases, not to `PriceSource`. Its step-2 successor still found the policy, through `MEMORY.md`.
+  The other two attached it to the interface, and their successors also ran `itp-context-summarize` on it.
+- **The loop keeps itself going.** Two of the three L1 step-2 agents recorded their own new aliases as rules, as the
+  capture step requires. The third extended the existing `MEMORY.md` row. The knowledge stays current for a third
+  task.
+- **Cost:** the capture step cost about 5k tokens and 13 s in step 1. In step 2, L1 took about 4k tokens and 11 s
+  more than L0, for reading and applying the rule, and was correct where L0 was not.
+- **Limits:** three pairs per arm and one policy. The capture rule is an instruction in `AGENTS.md`, not a gate: an
+  agent that ignored it would not have been stopped. In agent-loop, the `finish` learning step and its review would
+  be that gate. Whether recorded rules stay *correct* over many tasks, or pile up stale rows, is not tested here;
+  `MEMORY.md`'s own rule is to correct a row towards the executable truth.
 
 ### Calibration
 
