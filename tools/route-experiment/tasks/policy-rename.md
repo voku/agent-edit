@@ -1,0 +1,1 @@
+Rename the interface method `Shop\Pricing\PriceSource::amount()` to `price()`, together with every implementation and override of it, and update every call of it. Other methods that happen to be called `amount()` stay as they are.

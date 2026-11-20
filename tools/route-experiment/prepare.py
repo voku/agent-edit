@@ -49,12 +49,12 @@ def tree_digest(root: Path) -> str:
     return digest.hexdigest()
 
 
-def materialize(case: dict, repo: Path, source: Path | None) -> None:
+def materialize(case: dict, repo: Path, source: Path | None, context: bool = False) -> None:
     kind = case['source']['type']
     if kind == 'benchmark_fixture':
         run(['php', str(REPO_ROOT / 'tools/route-benchmark.php'), f'--fixture={repo}'], REPO_ROOT)
     elif kind == 'generator':
-        run(['python3', str(KIT / case['source']['script']), str(repo), 'baseline'], REPO_ROOT)
+        run(['python3', str(KIT / case['source']['script']), str(repo), 'baseline'] + (['--context'] if context else []), REPO_ROOT)
     elif kind == 'git':
         if source is None:
             sys.exit(f"case {case['id']} needs --source: a local clone of {case['source']['repository']}")
@@ -87,24 +87,82 @@ def install_tools(target: Path, versions: dict, composer: bool) -> dict:
     return {'agent_edit': f"tools/route-tools/vendor/bin/agent-edit", 'agent_map': 'tools/route-tools/vendor/bin/agent-map', 'installed': composer}
 
 
-def install_runtime_wrappers(target: Path, runtime: Path, log: Path) -> dict:
-    """In-session runs without Composer access: the binaries are wrappers around one prepared runtime (agent-edit at
-    the pinned release with its vendor directory) that log every call to <out>/tool-calls.log, outside the workspace,
-    so the route an agent took is read from the log rather than from its own account."""
+def install_runtime_wrappers(target: Path, runtime: Path) -> dict:
+    """In-session runs without Composer access: an independent copy of one prepared runtime (agent-edit at the pinned
+    release with its vendor directory) inside the workspace, at tools/route-tools/runtime, and wrappers that call it by
+    a relative path. Nothing the agent is pointed at lies outside the workspace: in Run 3 a wrapper that called an
+    outside path was itself a reason not to use the tools. Every call is logged to tools/route-tools/calls.log (ignored
+    by git), so the route is read from the log rather than from the agent's own account. The copy's digest is recorded,
+    and grade.py reports whether it changed."""
+    copy = target / 'runtime'
+    target.mkdir(parents=True)
+    # An independent copy: a hard link would let a write through one workspace change the source runtime and every
+    # other arm prepared from it.
+    shutil.copytree(runtime, copy, symlinks=True)
     bindir = target / 'vendor/bin'
     bindir.mkdir(parents=True)
-    binaries = {'agent-edit': runtime / 'bin/agent-edit', 'agent-map': runtime / 'vendor/bin/agent-map'}
+    binaries = {'agent-edit': 'runtime/bin/agent-edit', 'agent-map': 'runtime/vendor/bin/agent-map'}
     for name, binary in binaries.items():
-        if not binary.exists():
+        if not (target / binary).exists():
             sys.exit(f'runtime has no {binary}')
         wrapper = bindir / name
         wrapper.write_text(
             '#!/usr/bin/env bash\n'
-            f'printf \'%s\\t%s\\t%s\\n\' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" {name} "$*" >> {log}\n'
-            f'exec php {binary} "$@"\n'
+            'tools="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"\n'
+            f'printf \'%s\\t%s\\t%s\\n\' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" {name} "$*" >> "$tools/calls.log"\n'
+            f'exec php "$tools/{binary}" "$@"\n'
         )
         wrapper.chmod(0o755)
-    return {'agent_edit': 'tools/route-tools/vendor/bin/agent-edit', 'agent_map': 'tools/route-tools/vendor/bin/agent-map', 'installed': True, 'runtime': str(runtime)}
+    return {
+        'agent_edit': 'tools/route-tools/vendor/bin/agent-edit',
+        'agent_map': 'tools/route-tools/vendor/bin/agent-map',
+        'installed': True,
+        'runtime': str(copy),
+        'runtime_digest': tree_digest(copy),
+        'runtime_source': str(runtime),
+    }
+
+
+TOOL_ARMS = ('B', 'C', 'D')
+GUIDED_ARMS = ('C', 'D')
+CONTEXT_ARMS = ('D', 'E')
+CONTEXT_GUIDANCE = (
+    '## Project context\n\n'
+    '`MEMORY.md` holds reviewed, durable rules for this repository; read it before changing code. Symbols with a '
+    '`#[Rule]` attribute carry architecture intent: run `tools/itp/bin/itp-context-summarize <file>` on a file '
+    'before changing it.\n'
+)
+
+
+def install_itp_context(target: Path, checkout: Path) -> dict:
+    """The itp-context CLI inside the workspace: its src/ and bin/, an autoloader for its namespace and the project's
+    PSR-4 roots, and bin wrappers that log each call to tools/itp/calls.log (ignored by git)."""
+    target.mkdir(parents=True)
+    shutil.copytree(checkout / 'src', target / 'lib/src')
+    shutil.copytree(checkout / 'bin', target / 'lib/bin')
+    (target / 'lib/vendor').mkdir()
+    (target / 'lib/vendor/autoload.php').write_text(
+        '<?php\n'
+        'spl_autoload_register(static function (string $class): void {\n'
+        "    foreach (['ItpContext\\\\' => dirname(__DIR__) . '/src/', 'Shop\\\\' => dirname(__DIR__, 4) . '/src/'] as $prefix => $dir) {\n"
+        '        if (str_starts_with($class, $prefix)) {\n'
+        "            $file = $dir . str_replace('\\\\', '/', substr($class, strlen($prefix))) . '.php';\n"
+        '            if (is_file($file)) { require $file; return; }\n'
+        '        }\n'
+        '    }\n'
+        '});\n'
+    )
+    (target / 'bin').mkdir()
+    for binary in sorted(p.name for p in (checkout / 'bin').iterdir()):
+        wrapper = target / 'bin' / binary
+        wrapper.write_text(
+            '#!/usr/bin/env bash\n'
+            'itp="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"\n'
+            f'printf \'%s\\t%s\\t%s\\n\' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" {binary} "$*" >> "$itp/calls.log"\n'
+            f'exec php "$itp/lib/bin/{binary}" "$@"\n'
+        )
+        wrapper.chmod(0o755)
+    return {'bin': 'tools/itp/bin', 'version_source': str(checkout)}
 
 
 def vendor_shim(repo: Path, runtime: Path, extra_psr4: list[str]) -> None:
@@ -170,7 +228,8 @@ def guidance(tools: dict, repo: Path) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument('--case', required=True)
-    parser.add_argument('--arm', required=True, choices=['A', 'B', 'C'])
+    parser.add_argument('--arm', required=True, choices=['A', 'B', 'C', 'D', 'E'])
+    parser.add_argument('--itp-context', help='arms D and E: a voku/itp-context checkout (src/ and bin/) to install in the workspace')
     parser.add_argument('--out', required=True)
     parser.add_argument('--source', help='local clone for git cases (outside the workspace)')
     parser.add_argument('--no-composer', action='store_true', help='skip Composer installs (dry preparation only)')
@@ -189,7 +248,11 @@ def main() -> None:
     repo = out / 'repo'
     repo.mkdir(parents=True)
 
-    materialize(case, repo, Path(args.source).resolve() if args.source else None)
+    # D = C + project context, E = A + project context (MEMORY.md, ItpContext rules and the itp-context CLI).
+    context = args.arm in CONTEXT_ARMS
+    if context and not case.get('context'):
+        sys.exit(f"case {case['id']} has no project context for arm {args.arm}")
+    materialize(case, repo, Path(args.source).resolve() if args.source else None, context)
     baseline_digest = tree_digest(repo)
     baseline_failures = None
     if case.get('test_command') and args.vendor_shim:
@@ -197,16 +260,25 @@ def main() -> None:
         baseline_failures = test_failures(repo, case['test_command'])
     elif case.get('test_command') and not args.no_composer and (repo / 'composer.json').exists():
         run(['composer', 'install', '--no-interaction', '--no-progress', '--prefer-dist'], repo)
-    (repo / '.gitignore').write_text(((repo / '.gitignore').read_text() if (repo / '.gitignore').exists() else '') + '\nvendor/\ntools/route-tools/vendor/\n.agent-map/\n.agent-edit/\n')
+    (repo / '.gitignore').write_text(((repo / '.gitignore').read_text() if (repo / '.gitignore').exists() else '') + '\nvendor/\ntools/route-tools/vendor/\ntools/route-tools/runtime/\ntools/route-tools/calls.log\ntools/itp/calls.log\n.agent-map/\n.agent-edit/\n')
 
     tools = None
     instruction_bytes = 0
-    if args.arm in ('B', 'C') and args.tools_runtime:
-        tools = install_runtime_wrappers(repo / 'tools/route-tools', Path(args.tools_runtime).resolve(), out / 'tool-calls.log')
-    elif args.arm in ('B', 'C'):
+    if args.arm in TOOL_ARMS and args.tools_runtime:
+        tools = install_runtime_wrappers(repo / 'tools/route-tools', Path(args.tools_runtime).resolve())
+    elif args.arm in TOOL_ARMS:
         tools = install_tools(repo / 'tools/route-tools', cases, not args.no_composer)
-    if args.arm == 'C':
-        section = guidance(tools, repo)
+    sections = []
+    if args.arm in GUIDED_ARMS:
+        sections.append(guidance(tools, repo))
+    itp = None
+    if context:
+        if not args.itp_context:
+            sys.exit(f'arm {args.arm} needs --itp-context')
+        itp = install_itp_context(repo / 'tools/itp', Path(args.itp_context).resolve())
+        sections.append(CONTEXT_GUIDANCE)
+    if sections:
+        section = '\n\n'.join(sections)
         agents = repo / 'AGENTS.md'
         agents.write_text((agents.read_text() + '\n\n' if agents.exists() else '') + section)
         instruction_bytes = len(section.encode())
@@ -227,6 +299,8 @@ def main() -> None:
         'case_source_digest': baseline_digest,
         'workspace_commit': run(['git', 'rev-parse', 'HEAD'], repo).stdout.strip(),
         'tools': tools,
+        'project_context': context,
+        'itp_context': itp,
         'instruction_overhead_bytes': instruction_bytes,
         'composer_installed': not args.no_composer,
         'baseline_test_failures': baseline_failures,

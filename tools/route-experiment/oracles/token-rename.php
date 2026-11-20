@@ -11,6 +11,8 @@ declare(strict_types=1);
  * requires identical output. It executes candidate-written code: run it only in a disposable environment.
  *
  *   hierarchy-rename       expected tree from fixtures/hierarchy_rename.py (only the PriceSource family renamed)
+ *   stale-rename           hierarchy-rename's expected tree plus the concurrent writer's method, its family call
+ *                          renamed (fixtures/stale_writer.py adds it while the agent works)
  *   scale-rename           expected tree from fixtures/scale_rename.py (only the Ledger\Entry family renamed);
  *                          both trees also run the baseline's run.php
  *   recall-collect-rename  baseline with every identifier token `collect` replaced by `gather`
@@ -36,7 +38,8 @@ $code = static function (string $source, ?array $rename = null): string {
 };
 $phpFiles = static function (string $root): array {
     $files = [];
-    foreach (['src', 'tests'] as $dir) {
+    // config/ and checks/ exist only where a case's correctness depends on them (context-rename).
+    foreach (['src', 'tests', 'config', 'checks'] as $dir) {
         if (!is_dir($root . '/' . $dir)) {
             continue;
         }
@@ -54,10 +57,16 @@ $phpFiles = static function (string $root): array {
 $expected = [];
 switch ($case) {
     case 'hierarchy-rename':
+    case 'stale-rename':
     case 'scale-rename':
+    case 'context-rename':
         $tmp = sys_get_temp_dir() . '/route-oracle-' . bin2hex(random_bytes(6));
-        $generator = $case === 'hierarchy-rename' ? 'hierarchy_rename.py' : 'scale_rename.py';
-        exec('python3 ' . escapeshellarg(__DIR__ . '/../fixtures/' . $generator) . ' ' . escapeshellarg($tmp) . ' expected', $_out, $status);
+        $generator = ['scale-rename' => 'scale_rename.py', 'context-rename' => 'context_rename.py'][$case] ?? 'hierarchy_rename.py';
+        // stale-rename: the writer's concurrent method must survive, with its family call renamed too.
+        $variant = $case === 'stale-rename' ? 'expected-stale' : 'expected';
+        // context-rename: the context arms' tree carries MEMORY.md and the #[Rule] annotations.
+        $flags = $case === 'context-rename' && is_file($baseline . '/MEMORY.md') ? ' --context' : '';
+        exec('python3 ' . escapeshellarg(__DIR__ . '/../fixtures/' . $generator) . ' ' . escapeshellarg($tmp) . ' ' . $variant . $flags, $_out, $status);
         if ($status !== 0) {
             fwrite(STDERR, "fixture generator failed\n");
             exit(2);
@@ -92,7 +101,10 @@ $checks = [
 ];
 
 $observed = null;
-if ($case === 'hierarchy-rename') {
+if (in_array($case, ['hierarchy-rename', 'stale-rename', 'context-rename'], true)) {
+    $gateway = $case === 'context-rename'
+        ? ' echo "|", json_encode((new Shop\\Gateway\\PaymentGateway(require getcwd() . "/config/gateway.php"))->charge([$catalog->product(2), $catalog->bundle()]));'
+        : '';
     $script = <<<'PHP'
 spl_autoload_register(static function (string $class): void {
     $file = getcwd() . '/src/' . str_replace('\\', '/', substr($class, strlen('Shop\\'))) . '.php';
@@ -111,6 +123,7 @@ echo implode('|', [
     (new Shop\Report\Ledger())->book($catalog->source('plan'), $promotions->coupon('X')),
 ]);
 PHP;
+    $script .= $gateway;
     $run = static function (string $root) use ($script): string {
         $output = [];
         exec('cd ' . escapeshellarg($root) . ' && php -r ' . escapeshellarg($script) . ' 2>&1', $output, $status);
