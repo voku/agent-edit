@@ -1,0 +1,1 @@
+Rename the interface method `Ledger\Entry::value()` to `amount()`, together with every implementation and override of it, and update every call of it. Do not change anything else; other methods that happen to be called `value()` stay as they are.

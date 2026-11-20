@@ -11,6 +11,8 @@ declare(strict_types=1);
  * requires identical output. It executes candidate-written code: run it only in a disposable environment.
  *
  *   hierarchy-rename       expected tree from fixtures/hierarchy_rename.py (only the PriceSource family renamed)
+ *   scale-rename           expected tree from fixtures/scale_rename.py (only the Ledger\Entry family renamed);
+ *                          both trees also run the baseline's run.php
  *   recall-collect-rename  baseline with every identifier token `collect` replaced by `gather`
  */
 
@@ -52,8 +54,10 @@ $phpFiles = static function (string $root): array {
 $expected = [];
 switch ($case) {
     case 'hierarchy-rename':
+    case 'scale-rename':
         $tmp = sys_get_temp_dir() . '/route-oracle-' . bin2hex(random_bytes(6));
-        exec('python3 ' . escapeshellarg(__DIR__ . '/../fixtures/hierarchy_rename.py') . ' ' . escapeshellarg($tmp) . ' expected', $_out, $status);
+        $generator = $case === 'hierarchy-rename' ? 'hierarchy_rename.py' : 'scale_rename.py';
+        exec('python3 ' . escapeshellarg(__DIR__ . '/../fixtures/' . $generator) . ' ' . escapeshellarg($tmp) . ' expected', $_out, $status);
         if ($status !== 0) {
             fwrite(STDERR, "fixture generator failed\n");
             exit(2);
@@ -110,6 +114,20 @@ PHP;
     $run = static function (string $root) use ($script): string {
         $output = [];
         exec('cd ' . escapeshellarg($root) . ' && php -r ' . escapeshellarg($script) . ' 2>&1', $output, $status);
+
+        return $status === 0 ? implode("\n", $output) : 'error: ' . implode("\n", $output);
+    };
+    $want = $run($baseline);
+    $observed = $run($final);
+    $checks['behaviour unchanged'] = !str_starts_with($want, 'error') && $observed === $want;
+}
+if ($case === 'scale-rename') {
+    // The baseline's own run.php drives both trees, so an edited harness cannot change the verdict. $final is the
+    // grader's scratch copy, so overwriting its run.php touches nothing the agent left behind.
+    copy($baseline . '/run.php', $final . '/run.php');
+    $run = static function (string $root): string {
+        $output = [];
+        exec('cd ' . escapeshellarg($root) . ' && php run.php 2>&1', $output, $status);
 
         return $status === 0 ? implode("\n", $output) : 'error: ' . implode("\n", $output);
     };
