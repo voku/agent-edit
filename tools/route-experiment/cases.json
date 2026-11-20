@@ -3,7 +3,7 @@
   "kind": "route_experiment_cases",
   "note": "Tasks name only the intended change. Oracles live in oracles/ and never enter a workspace.",
   "agent_edit_version": "0.8.1",
-  "agent_map_version": "0.24.0",
+  "agent_map_version": "0.24.1",
   "cases": [
     {
       "id": "fixture-rename",

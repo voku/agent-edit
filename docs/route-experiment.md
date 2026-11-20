@@ -2,7 +2,7 @@
 
 Status: **Run 1 and Run 2 done** (24 in-session runs; see Results). Both hit a ceiling: every arm was correct on
 every case, including the harder Run 2 cases. They show tool selection and overhead, not an effectiveness difference.
-No run used agent-map, and preparing Run 2 found four defects in the Map + Edit route itself (see Follow-ups).
+No run used agent-map, and preparing Run 2 found four defects in the Map + Edit route itself (see Follow-ups). All four are fixed: agent-edit 0.8.1 and agent-map 0.24.1.
 
 ## Question
 
@@ -263,14 +263,16 @@ workspace: `build`, `rename-plan`, `apply --dry-run`, `apply`, `refresh`, `verif
 
 #### Follow-ups found while preparing Run 2
 
-Each was found by driving the Map + Edit route on the Run 2 cases. None was found by an agent run.
+Each was found by driving the Map + Edit route on the Run 2 cases. None was found by an agent run. With agent-map
+0.24.1, `recall-collect-rename` is a safe plan of 62 edits in 25 files, and the guided route grades correct with the
+suite green. One gap remains: `parameter-rename-plan` still blocks on anonymous implementations.
 
 | # | Owner | Defect | Status |
 | --- | --- | --- | --- |
 | 0 | agent-edit | A safe `method_rename_plan` for an interface or overridden method was always refused at apply ("not bound to the declared target identity"): family-bound edits were accepted only for parameter renames. The hierarchy rename, the core Map + Edit use case, could not be applied at all. | Fixed in 0.8.1 (#73), with an end-to-end regression test. |
-| 1 | agent-map | A nullsafe call `$repo->maybe()?->amount()` on a family receiver is recorded twice: correctly resolved, and as `dynamic` with receiver `Product\|null`. The dynamic copy marks the plan `review_required`. | Open. |
-| 2 | agent-map | A first-class callable `$bundle->amount(...)` with a resolved receiver blocks the rename: "building a callable is not a call relation". The receiver type is known, so the reference is rewritable. | Open. |
-| 3 | agent-map | An interface method implemented by an anonymous class (`new class implements RecallProvider`, here in Recall's tests) blocks the rename: "crosses an unindexed method contract". | Open. |
+| 1 | agent-map | A nullsafe call `$repo->maybe()?->amount()` on a family receiver is recorded twice: correctly resolved, and as `dynamic` with receiver `Product\|null`. The dynamic copy marks the plan `review_required`. | Fixed in agent-map 0.24.1 (voku/agent-map#202). |
+| 2 | agent-map | A first-class callable `$bundle->amount(...)` with a resolved receiver blocks the rename: "building a callable is not a call relation". The receiver type is known, so the reference is rewritable. | Fixed in agent-map 0.24.1 (voku/agent-map#202). |
+| 3 | agent-map | An interface method implemented by an anonymous class (`new class implements RecallProvider`, here in Recall's tests) blocks the rename: "crosses an unindexed method contract". | Fixed in agent-map 0.24.1 (voku/agent-map#202). |
 | 4 | kit | The Recall vendor shim had no PHPStan, so Run 1 agents could not run the case's static analysis. | Fixed in this run. |
 
 ### Calibration
