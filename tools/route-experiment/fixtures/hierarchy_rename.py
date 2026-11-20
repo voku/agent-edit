@@ -2,7 +2,7 @@
 """Generated fixture for the `hierarchy-rename` case: an interface method with several implementations, and the same
 method name on unrelated classes, reached through return types rather than declared variable types.
 
-    python3 tools/route-experiment/fixtures/hierarchy_rename.py DIR [baseline|expected]
+    python3 tools/route-experiment/fixtures/hierarchy_rename.py DIR [baseline|expected|expected-stale]
 
 `baseline` is the starting tree; `expected` is the same tree with the PriceSource family's `amount` renamed to
 `price` and nothing else changed. Text search for `->amount(` cannot tell the two apart: the receiver type is only
@@ -255,8 +255,32 @@ final class Ledger
     return f
 
 
+STALE_PATH = 'src/Checkout/Cart.php'
+
+
+def stale_method(p: str) -> str:
+    """The method the stale-rename writer adds to Cart while the agent works: one family call (`p`) and one unrelated
+    Coupon call on the same line."""
+    return f'''
+    public function preview(int $id): int
+    {{
+        return $this->catalog->product($id)->{p}() - $this->promotions->coupon('PREVIEW')->amount();
+    }}
+'''
+
+
+def stale_insert(source: str, p: str) -> str:
+    """Insert the stale method before the closing brace of the last class in the file."""
+    end = source.rstrip().rindex('}')
+    return source[:end].rstrip('\n') + '\n' + stale_method(p) + source[end:]
+
+
 def write(target: Path, variant: str) -> None:
-    for path, content in files('price' if variant == 'expected' else 'amount').items():
+    """baseline, expected, or expected-stale: expected plus the writer's method with the family call renamed."""
+    name = 'price' if variant in ('expected', 'expected-stale') else 'amount'
+    for path, content in files(name).items():
+        if variant == 'expected-stale' and path == STALE_PATH:
+            content = stale_insert(content, 'price')
         file = target / path
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_text(content)

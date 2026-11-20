@@ -88,13 +88,14 @@ def behaviour_metrics(events: list[dict]) -> dict:
     }
 
 
-def logged_route(log: Path, changed: list[str]) -> dict | None:
-    """The route from <out>/tool-calls.log (written by the runtime wrappers, outside the workspace), or None when the
+def logged_route(log: Path, changed: list[str], wrapped: bool = False) -> dict | None:
+    """The route from the runtime wrappers' call log (tools/route-tools/calls.log; <out>/tool-calls.log in runs prepared
+    before the runtime moved into the workspace), or None when the
     arm had no wrapped tools. A mutating agent-edit call (apply, edit, recover) after an agent-map planner call is
     map+edit; a mutating agent-edit call alone is direct; source changes without either are native."""
-    if not log.exists():
+    if not log.exists() and not wrapped:
         return None
-    calls = [line.split('\t') for line in log.read_text().splitlines() if line.count('\t') >= 2]
+    calls = [line.split('\t') for line in log.read_text().splitlines() if line.count('\t') >= 2] if log.exists() else []
     # Every agent-map planner subcommand ends in `-plan` (rename-plan, method-removal-plan, ...).
     plan_at = [i for i, c in enumerate(calls) if c[1] == 'agent-map' and re.match(r'\s*\S*-plan\b', c[2])]
     mutation_at = [i for i, c in enumerate(calls) if c[1] == 'agent-edit' and re.match(r'\s*(apply|edit|recover)\b', c[2]) and '--dry-run' not in c[2]]
@@ -205,12 +206,33 @@ def main() -> None:
         if run_record.get(key) is not None:
             row[key] = run_record[key]
     row['ran'] = row['ran'] or bool(run_record.get('ran'))
-    route = logged_route(out / 'tool-calls.log', changed)
+    # Runs prepared before the in-workspace runtime logged outside the workspace.
+    log = out / 'repo/tools/route-tools/calls.log'
+    route = logged_route(log if log.exists() or not (out / 'tool-calls.log').exists() else out / 'tool-calls.log', changed, bool((manifest.get('tools') or {}).get('runtime')))
+    tools = manifest.get('tools') or {}
+    if tools.get('runtime_digest'):
+        sys.path.insert(0, str(KIT))
+        from prepare import tree_digest
+        row['tools_runtime_modified'] = tree_digest(Path(tools['runtime'])) != tools['runtime_digest']
     if route is not None:
         row.update(route)
     elif not (out / 'transcript.jsonl').exists():
         row['chosen_route'] = 'native' if changed else 'none'
         row['route_tool_calls'] = {'agent_map': 0, 'agent_edit': 0}
+    # stale-rename: when the concurrent writer fired, and whether the agent touched the file after it.
+    writer_log = out / 'stale-writer.jsonl'
+    if case.get('concurrent_writer'):
+        events = [json.loads(line) for line in writer_log.read_text().splitlines()] if writer_log.exists() else []
+        wrote = next((e for e in events if e.get('event') == 'wrote'), None)
+        target = out / 'repo' / 'src/Checkout/Cart.php'
+        row['concurrent_writer'] = {
+            'ran': wrote is not None,
+            'events': [e.get('event') for e in events],
+            'target_changed_after_write': bool(wrote) and target.exists() and target.stat().st_mtime > wrote['at'] + 0.5,
+        }
+        if wrote is None:
+            row['correct'] = False
+            row['ungradeable'] = 'the concurrent writer never wrote; the run did not test a stale read'
     row['cost_per_success_usd'] = row['cost_usd'] if row['correct'] and row['cost_usd'] is not None else None
     print(json.dumps(row, indent=2))
     if args.ledger:

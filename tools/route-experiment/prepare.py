@@ -87,24 +87,38 @@ def install_tools(target: Path, versions: dict, composer: bool) -> dict:
     return {'agent_edit': f"tools/route-tools/vendor/bin/agent-edit", 'agent_map': 'tools/route-tools/vendor/bin/agent-map', 'installed': composer}
 
 
-def install_runtime_wrappers(target: Path, runtime: Path, log: Path) -> dict:
-    """In-session runs without Composer access: the binaries are wrappers around one prepared runtime (agent-edit at
-    the pinned release with its vendor directory) that log every call to <out>/tool-calls.log, outside the workspace,
-    so the route an agent took is read from the log rather than from its own account."""
+def install_runtime_wrappers(target: Path, runtime: Path) -> dict:
+    """In-session runs without Composer access: a hard-linked copy of one prepared runtime (agent-edit at the pinned
+    release with its vendor directory) inside the workspace, at tools/route-tools/runtime, and wrappers that call it by
+    a relative path. Nothing the agent is pointed at lies outside the workspace: in Run 3 a wrapper that called an
+    outside path was itself a reason not to use the tools. Every call is logged to tools/route-tools/calls.log (ignored
+    by git), so the route is read from the log rather than from the agent's own account. The copy's digest is recorded,
+    and grade.py reports whether it changed."""
+    copy = target / 'runtime'
+    target.mkdir(parents=True)
+    subprocess.run(['cp', '-al', str(runtime), str(copy)], check=True)
     bindir = target / 'vendor/bin'
     bindir.mkdir(parents=True)
-    binaries = {'agent-edit': runtime / 'bin/agent-edit', 'agent-map': runtime / 'vendor/bin/agent-map'}
+    binaries = {'agent-edit': 'runtime/bin/agent-edit', 'agent-map': 'runtime/vendor/bin/agent-map'}
     for name, binary in binaries.items():
-        if not binary.exists():
+        if not (target / binary).exists():
             sys.exit(f'runtime has no {binary}')
         wrapper = bindir / name
         wrapper.write_text(
             '#!/usr/bin/env bash\n'
-            f'printf \'%s\\t%s\\t%s\\n\' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" {name} "$*" >> {log}\n'
-            f'exec php {binary} "$@"\n'
+            'tools="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"\n'
+            f'printf \'%s\\t%s\\t%s\\n\' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" {name} "$*" >> "$tools/calls.log"\n'
+            f'exec php "$tools/{binary}" "$@"\n'
         )
         wrapper.chmod(0o755)
-    return {'agent_edit': 'tools/route-tools/vendor/bin/agent-edit', 'agent_map': 'tools/route-tools/vendor/bin/agent-map', 'installed': True, 'runtime': str(runtime)}
+    return {
+        'agent_edit': 'tools/route-tools/vendor/bin/agent-edit',
+        'agent_map': 'tools/route-tools/vendor/bin/agent-map',
+        'installed': True,
+        'runtime': str(copy),
+        'runtime_digest': tree_digest(copy),
+        'runtime_source': str(runtime),
+    }
 
 
 def vendor_shim(repo: Path, runtime: Path, extra_psr4: list[str]) -> None:
@@ -197,12 +211,12 @@ def main() -> None:
         baseline_failures = test_failures(repo, case['test_command'])
     elif case.get('test_command') and not args.no_composer and (repo / 'composer.json').exists():
         run(['composer', 'install', '--no-interaction', '--no-progress', '--prefer-dist'], repo)
-    (repo / '.gitignore').write_text(((repo / '.gitignore').read_text() if (repo / '.gitignore').exists() else '') + '\nvendor/\ntools/route-tools/vendor/\n.agent-map/\n.agent-edit/\n')
+    (repo / '.gitignore').write_text(((repo / '.gitignore').read_text() if (repo / '.gitignore').exists() else '') + '\nvendor/\ntools/route-tools/vendor/\ntools/route-tools/runtime/\ntools/route-tools/calls.log\n.agent-map/\n.agent-edit/\n')
 
     tools = None
     instruction_bytes = 0
     if args.arm in ('B', 'C') and args.tools_runtime:
-        tools = install_runtime_wrappers(repo / 'tools/route-tools', Path(args.tools_runtime).resolve(), out / 'tool-calls.log')
+        tools = install_runtime_wrappers(repo / 'tools/route-tools', Path(args.tools_runtime).resolve())
     elif args.arm in ('B', 'C'):
         tools = install_tools(repo / 'tools/route-tools', cases, not args.no_composer)
     if args.arm == 'C':

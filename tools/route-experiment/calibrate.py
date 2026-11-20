@@ -45,6 +45,8 @@ def reference(case: str, repo: Path) -> None:
             replace(repo, path, 'toRecallResult', 'asRecallResult', 0)
     elif case == 'hierarchy-rename':
         subprocess.run(['python3', str(KIT / 'fixtures/hierarchy_rename.py'), str(repo), 'expected'], check=True)
+    elif case == 'stale-rename':
+        subprocess.run(['python3', str(KIT / 'fixtures/hierarchy_rename.py'), str(repo), 'expected-stale'], check=True)
     elif case == 'scale-rename':
         subprocess.run(['python3', str(KIT / 'fixtures/scale_rename.py'), str(repo), 'expected'], check=True)
     elif case == 'recall-collect-rename':
@@ -73,6 +75,15 @@ def shortcut(case: str, repo: Path) -> None:
         path.write_text(re.sub(r'function ' + old + r'\(', 'function ' + new + '(', text))
 
 
+def simulate_writer(out: Path) -> None:
+    """What fixtures/stale_writer.py does during a real run: add its method to the untouched tree, and log it."""
+    sys.path.insert(0, str(KIT / 'fixtures'))
+    from hierarchy_rename import STALE_PATH, stale_insert
+    target = out / 'repo' / STALE_PATH
+    target.write_text(stale_insert(target.read_text(), 'amount'))
+    (out / 'stale-writer.jsonl').write_text(json.dumps({'at': 0, 'event': 'wrote', 'path': STALE_PATH}) + '\n')
+
+
 def grade(out: Path, with_tests: bool) -> dict:
     args = ['python3', str(KIT / 'grade.py'), '--out', str(out)] + ([] if with_tests else ['--no-tests'])
     return json.loads(subprocess.run(args, check=True, capture_output=True, text=True).stdout)
@@ -96,6 +107,9 @@ def main() -> None:
                 continue
             source = args.recall_source
         outcomes = {'untouched': False, 'reference': True, 'reference+stray': True} | ({'native-shortcut': False} if case['id'] in SHORTCUTS else {})
+        if case.get('concurrent_writer'):
+            # A stale read that overwrote the writer's method, and a rename that never re-read the file.
+            outcomes |= {'stale-overwrite': False, 'missed-concurrent-call': False}
         for outcome, want_correct in outcomes.items():
             out = work / f"{case['id']}-{outcome}"
             prepare = ['python3', str(KIT / 'prepare.py'), '--case', case['id'], '--arm', 'A', '--out', str(out)]
@@ -103,8 +117,18 @@ def main() -> None:
             prepare += [] if args.with_tests else ['--no-composer']
             subprocess.run(prepare, check=True, capture_output=True, text=True)
             repo = out / 'repo'
+            if case.get('concurrent_writer'):
+                simulate_writer(out)
             if outcome.startswith('reference'):
                 reference(case['id'], repo)
+            if outcome == 'stale-overwrite':
+                subprocess.run(['python3', str(KIT / 'fixtures/hierarchy_rename.py'), str(repo), 'expected'], check=True)
+            if outcome == 'missed-concurrent-call':
+                subprocess.run(['python3', str(KIT / 'fixtures/hierarchy_rename.py'), str(repo), 'expected'], check=True)
+                cart = repo / 'src/Checkout/Cart.php'
+                sys.path.insert(0, str(KIT / 'fixtures'))
+                from hierarchy_rename import stale_insert
+                cart.write_text(stale_insert(cart.read_text(), 'amount'))
             if outcome == 'native-shortcut':
                 shortcut(case['id'], repo)
             if outcome == 'reference+stray':

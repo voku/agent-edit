@@ -11,6 +11,8 @@ declare(strict_types=1);
  * requires identical output. It executes candidate-written code: run it only in a disposable environment.
  *
  *   hierarchy-rename       expected tree from fixtures/hierarchy_rename.py (only the PriceSource family renamed)
+ *   stale-rename           hierarchy-rename's expected tree plus the concurrent writer's method, its family call
+ *                          renamed (fixtures/stale_writer.py adds it while the agent works)
  *   scale-rename           expected tree from fixtures/scale_rename.py (only the Ledger\Entry family renamed);
  *                          both trees also run the baseline's run.php
  *   recall-collect-rename  baseline with every identifier token `collect` replaced by `gather`
@@ -54,10 +56,13 @@ $phpFiles = static function (string $root): array {
 $expected = [];
 switch ($case) {
     case 'hierarchy-rename':
+    case 'stale-rename':
     case 'scale-rename':
         $tmp = sys_get_temp_dir() . '/route-oracle-' . bin2hex(random_bytes(6));
-        $generator = $case === 'hierarchy-rename' ? 'hierarchy_rename.py' : 'scale_rename.py';
-        exec('python3 ' . escapeshellarg(__DIR__ . '/../fixtures/' . $generator) . ' ' . escapeshellarg($tmp) . ' expected', $_out, $status);
+        $generator = $case === 'scale-rename' ? 'scale_rename.py' : 'hierarchy_rename.py';
+        // stale-rename: the writer's concurrent method must survive, with its family call renamed too.
+        $variant = $case === 'stale-rename' ? 'expected-stale' : 'expected';
+        exec('python3 ' . escapeshellarg(__DIR__ . '/../fixtures/' . $generator) . ' ' . escapeshellarg($tmp) . ' ' . $variant, $_out, $status);
         if ($status !== 0) {
             fwrite(STDERR, "fixture generator failed\n");
             exit(2);
@@ -92,7 +97,7 @@ $checks = [
 ];
 
 $observed = null;
-if ($case === 'hierarchy-rename') {
+if ($case === 'hierarchy-rename' || $case === 'stale-rename') {
     $script = <<<'PHP'
 spl_autoload_register(static function (string $class): void {
     $file = getcwd() . '/src/' . str_replace('\\', '/', substr($class, strlen('Shop\\'))) . '.php';
