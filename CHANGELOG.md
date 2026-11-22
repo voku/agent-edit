@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## 0.8.2 - 2026-11-22
+
+### Changed
+
+- Accept `voku/agent-map` `^0.25.0` (opt-in TypeScript/JavaScript declarations; PHP-only maps are unchanged). CI and the real-refactoring dogfood now require the installed agent-map to be at least 0.25.0.
+
 ### Development
 
 - Route experiment Run 2: 12 in-session runs on two harder cases, `hierarchy-rename` (generated interface hierarchy with same-line unrelated methods) and `recall-collect-rename` (25 files of real code). All correct, all native, no tool call in any arm; guidance cost about 4% more tokens. Results and the follow-up list are in `docs/route-experiment.md`.
