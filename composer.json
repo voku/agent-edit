@@ -30,7 +30,7 @@
     "php": "^8.3",
     "helgesverre/toon": "^3.1",
     "nikic/php-parser": "^5.2",
-    "voku/agent-map": "^0.20.0 || ^0.21.0 || ^0.22.0 || ^0.23.0 || ^0.24.0",
+    "voku/agent-map": "^0.20.0 || ^0.21.0 || ^0.22.0 || ^0.23.0 || ^0.24.0 || ^0.25.0",
     "voku/simple-php-code-parser": "^0.22.14"
   },
   "require-dev": {
