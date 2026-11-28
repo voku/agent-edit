@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace voku\AgentEdit\Tests;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use voku\AgentEdit\Apply\ClassScaffoldPlanApplier;
@@ -136,10 +137,9 @@ final class ClassScaffoldPlanTest extends TestCase
     }
 
     /**
-     * @dataProvider declarationKinds
-     *
      * @param list<string> $implements
      */
+    #[DataProvider('declarationKinds')]
     public function testEveryKindTheMapCanScaffoldIsAcceptedAndVerifies(string $type, bool $final, bool $readonly, ?string $extends, array $implements, string $needle): void
     {
         $this->gitInit();
@@ -256,7 +256,7 @@ final class ClassScaffoldPlanTest extends TestCase
         $this->assertRefused($plan, 'does not match the current map identity', FailureCode::EvidenceStale);
     }
 
-    /** @dataProvider forgedPlans */
+    #[DataProvider('forgedPlans')]
     public function testForgedPlansAreRefusedBeforeAnyChange(callable $forge, string $message): void
     {
         $this->assertRefused($forge($this->plan()), $message);

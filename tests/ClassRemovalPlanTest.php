@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace voku\AgentEdit\Tests;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
@@ -105,7 +106,7 @@ final class ClassRemovalPlanTest extends TestCase
         }
     }
 
-    /** @dataProvider malformedPlans */
+    #[DataProvider('malformedPlans')]
     public function testMalformedPlansFailClosed(callable $mutate, string $message): void
     {
         $plan = $mutate($this->plan());

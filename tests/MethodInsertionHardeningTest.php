@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace voku\AgentEdit\Tests;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use voku\AgentEdit\Apply\MethodInsertionPlanApplier;
@@ -337,7 +338,7 @@ PHP);
         self::assertStringContainsString('function plain', $this->read('src/Dest.php'));
     }
 
-    /** @dataProvider forgedInsertions */
+    #[DataProvider('forgedInsertions')]
     public function testForgedInsertionsAreRefusedBeforeAnyChange(callable $forge, string $message): void
     {
         $this->assertRefused($forge($this->scaffoldPlan()), $message);
