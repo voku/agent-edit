@@ -401,7 +401,7 @@ PHP;
         self::assertSame([], (new SignatureGuard())->changes($before, $after));
     }
 
-    #[RequiresPhp('>= 8.4')]
+    #[RequiresPhp('>= 8.4.0')]
     public function testAsymmetricPropertyVisibilityIsPartOfThePropertyShape(): void
     {
         $guard = new SignatureGuard();

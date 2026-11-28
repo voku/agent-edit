@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace voku\AgentEdit\Tests;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use voku\AgentEdit\Tests\Support\ScratchProject;
 use voku\AgentEdit\Tests\Support\UnifiedPatch;
@@ -166,10 +167,9 @@ final class DirectEditFailureCodesTest extends TestCase
     }
 
     /**
-     * @dataProvider malformedPlans
-     *
      * @param array<string, mixed> $plan
      */
+    #[DataProvider('malformedPlans')]
     public function testAPlanThatBreaksItsContractIsPlanMalformed(array $plan, string $fragment): void
     {
         $error = $this->error(['apply', '-', '--format=json'], json_encode($plan, JSON_THROW_ON_ERROR));

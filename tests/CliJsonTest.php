@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace voku\AgentEdit\Tests;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use voku\AgentEdit\Cli\ApplyCommand;
 use voku\AgentEdit\Cli\CliApplication;
@@ -135,10 +136,9 @@ final class CliJsonTest extends TestCase
     }
 
     /**
-     * @dataProvider failureCases
-     *
      * @param list<string> $tokens
      */
+    #[DataProvider('failureCases')]
     public function testApplyFailuresAreOneJsonDocumentOnStdoutWithStableCodes(array $tokens, string $code, string $nextAction): void
     {
         file_put_contents($this->root . '/bad.json', '{broken');
